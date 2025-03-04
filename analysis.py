@@ -3,7 +3,8 @@ from scipy import stats, constants
 from scipy.stats._stats_py import LinregressResult
 from numpy.typing import ArrayLike, NDArray
 from numpy.polynomial import Polynomial
-from typing import Tuple, List, Callable, Any, Generator
+from collections.abc import Callable, Generator
+from typing import Any
 from pathlib import Path
 import h5py
 
@@ -15,10 +16,10 @@ def fitGrowthRate(
     polynomial_degree: int=7,
     min_interval_length: float=5.0,
     allowed_slope_deviation: float=0.2,
-) -> Tuple[
+) -> tuple[
     LinregressResult,
     NDArray,
-    Tuple[Polynomial, NDArray, NDArray]
+    tuple[Polynomial, NDArray, NDArray]
 ] | None:
     """Try to fit the growth rate from the energy of the electric field over time.
 
@@ -39,7 +40,7 @@ def fitGrowthRate(
             difference in slope compared to the turning-point. Defaults to 0.2.
 
     Returns:
-        Tuple[LinregressResult,NDArray,Tuple[Polynomial,NDArray,NDArray]]|None: Tuple of:
+        tuple[LinregressResult,NDArray,tuple[Polynomial,NDArray,NDArray]]|None: tuple of:
             1) scipy fit-result
             2) interval used to fit the data
             3) Information about the polyfit:
@@ -123,23 +124,23 @@ def avgTemperatureFromMomentumDist(
 
 def readFromRun(
     folder: Path,
-    dataset_names: List[str],
+    dataset_names: list[str],
     processElement: Callable[[h5py.Dataset], ArrayLike]|None=None,
     time_interval: slice|int=slice(None),
     recursive: bool=False,
-) -> Tuple[NDArray, Tuple[NDArray,...], List[Path]]:
+) -> tuple[NDArray, tuple[NDArray,...], tuple[Path]]:
     """Extracts specified datasets from a single simulation run.
 
     Args:
         folder (Path): Folder that contains the simulation data
-        dataset_names (List[str]): Names of the datasets to extract
+        dataset_names (list[str]): Names of the datasets to extract
         processElement (Callable[[h5py.Dataset], ArrayLike]|None): Function to process
             individual datasets. Defaults to None.
         time_interval (slice|int): Select a range of time-indices of interest.
             Defaults to slice(None).
         recursive (bool): Whether to recursively read all sub-folders. Defaults to False.
     Returns:
-        Tuple[NDArray,Tuple[NDArray,...],List[Path]]: Time first, then datasets in the same
+        tuple[NDArray,tuple[NDArray,...],list[Path]]: Time first, then datasets in the same
             order as provided. Finally, the folder(s) that contain the simulation data are
             returned.
     """
@@ -180,17 +181,17 @@ def readFromRun(
 
 def _readFromMultipleRuns(
     folder: Path,
-    dataset_names: List[str],
+    dataset_names: list[str],
     processElement: Callable[[h5py.Dataset], ArrayLike]|None=None,
     time_interval: slice|int=slice(None)
-) -> Tuple[NDArray, Tuple[NDArray,...]]:
+) -> tuple[NDArray, tuple[NDArray,...]]:
     files = sorted(folder.glob("*.h5"))
     if len(files) > 0:
         return readFromRun(folder, dataset_names, processElement, time_interval)
 
     sub_folders = sorted(
         path for path in folder.iterdir()
-        if path.is_dir() and len(list(path.glob("**/*.h5"))) > 0
+        if path.is_dir() and len(list(path.glob("**/*.h5", recurse_symlinks=True))) > 0
     )
     assert len(sub_folders) > 0, "Found no simulation data"
     time_runs = []
@@ -204,15 +205,46 @@ def _readFromMultipleRuns(
         quantities_runs.append(list(quantities))
         folders_runs.append(folders)
     # Make sure that the format is the same across runs
-    assert all(time_runs[0].shape == t.shape for t in time_runs), "Times have be equal across runs"
-    assert all(np.all(time_runs[0] == t) for t in time_runs), "Times have to be equal across runs"
+    assert all(time_runs[0].shape == t.shape for t in time_runs), "Times have to match across runs"
+    assert all(np.all(time_runs[0] == t) for t in time_runs), "Times have to match across runs"
     assert all(
         all(ref_quantity.shape == quantities[q_idx].shape for quantities in quantities_runs)
         for q_idx, ref_quantity in enumerate(quantities_runs[0])
-    ), "Shape of datasets has to be the same across runs"
+    ), "Shape of datasets has to match across runs"
     time = time_runs[0]
     quantities = (
         np.array([quantities[q_idx] for quantities in quantities_runs])
         for q_idx in range(len(dataset_names))
     )
     return time, quantities, folders_runs
+
+def estimateFrequency(
+    axis: int,
+    axis_grid: NDArray,
+    E_field: NDArray,
+    avg_window_size: int=8,
+    peak_cutoff: float=0.95,
+) -> tuple[NDArray|float, float]:
+    assert avg_window_size >= 0, "Window size must be non-negative"
+    assert 0.0 <= peak_cutoff <= 1.0, "Peak cutoff must be non-negative and less than or equal to 1"
+    assert -2 <= axis <= -1, "Expect axis layout with spatial and temporal dimension"
+    assert E_field.ndim >= 2, "E-field needs at least space and time dimensions"
+    dx = abs(axis_grid[1] - axis_grid[0])
+    fft = np.abs(np.fft.rfft(E_field, axis=axis)) ** 2
+    mean_fft = np.mean(fft, axis=-2 if axis == -1 else -1)
+    N = mean_fft.shape[-1]
+    # apply moving average if desired
+    if avg_window_size > 0:
+        mean_fft = np.cumsum(mean_fft, axis=-1)
+        mean_fft = (
+            mean_fft[...,avg_window_size:] - mean_fft[...,:-avg_window_size]
+        ) / avg_window_size
+    # compute fractional index of peak center
+    peak_index = np.apply_along_axis(
+        lambda x: np.mean(np.nonzero(x > peak_cutoff * np.max(x, axis=-1))[0]),
+        axis=-1,
+        arr=mean_fft
+    )
+    k = 2 * np.pi * peak_index / (dx * N)
+    k_err = 2 * np.pi / (np.sqrt(2) * dx * N)
+    return k, k_err

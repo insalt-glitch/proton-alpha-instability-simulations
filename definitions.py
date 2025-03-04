@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import physics
 from scipy import constants
 
-RESULTS_FOLDER = Path("/media/nilsm/simulation_data/simulations")
+RESULTS_FOLDER = Path("/home/nilsm/simulation_data")
 ANALYSIS_FOLDER = Path(__file__).parent
 
 FIGURES_FOLDER = ANALYSIS_FOLDER / "figures"
@@ -18,7 +18,7 @@ class Species(Enum):
 
     def __eq__(self, other):
         return self.value == other.value
-    
+
     def __hash__(self):
         return self.value.__hash__()
 
@@ -45,7 +45,7 @@ class SpeciesInfo:
         """Angular plasma frequency (Hz)
         """
         return physics.plasmaFrequency(self.mass, self.number_density)
-    
+
     @property
     def v_thermal(self: SpeciesInfo) -> float:
         """Themal speed (m/s)
@@ -53,7 +53,7 @@ class SpeciesInfo:
         return physics.temperatureToThermalSpeed(
             self.temperature, self.mass
         )
-    
+
     @property
     def p_thermal(self: SpeciesInfo) -> float:
         """Thermal momentum (kg*m/s)
@@ -71,14 +71,14 @@ class RunInfo:
 
     @property
     def lambda_D_electron(self: RunInfo) -> float:
-        """Debye length (m) considering ONLY ELECTRONS 
+        """Debye length (m) considering ONLY ELECTRONS
         """
         return physics.debyeLength(
             self.electron.temperature,
             densities=[self.electron.number_density],
             charges=[-1]
         )
-    
+
     @property
     def lambda_D(self: RunInfo) -> float:
         """Debye length (m)
@@ -104,11 +104,11 @@ class RunInfo:
         """Angular proton plasma frequency (Hz)
         """
         return self.proton.omega
-    
+
     def __iter__(self: RunInfo):
         for species_info in [self.electron, self.proton, self.alpha]:
             yield species_info
-    
+
     def __getitem__(self: RunInfo, key: Species):
         mapping = {
             Species.ELECTRON: self.electron,
