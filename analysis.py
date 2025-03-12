@@ -184,7 +184,22 @@ def _readFromMultipleRuns(
     dataset_names: list[str],
     processElement: Callable[[h5py.Dataset], ArrayLike]|None=None,
     time_interval: slice|int=slice(None)
-) -> tuple[NDArray, tuple[NDArray,...]]:
+) -> tuple[NDArray, tuple[NDArray,...], tuple[Path]]:
+    """Read data from multiple runs (directories)
+
+    Args:
+        folder (Path): Current folder. Can contain other folders.
+        dataset_names (list[str]): Names of the datasets to extract
+        processElement (Callable[[h5py.Dataset], ArrayLike] | None, optional): Function to process
+            individual datasets. Defaults to None.
+        time_interval (slice | int, optional): Select a range of time-indices of interest.
+            Defaults to slice(None).
+
+    Returns:
+        tuple[NDArray,tuple[NDArray,...],list[Path]]: Time first, then datasets in the same
+            order as provided. Finally, the folder(s) that contain the simulation data are
+            returned.
+    """
     files = sorted(folder.glob("*.h5"))
     if len(files) > 0:
         return readFromRun(folder, dataset_names, processElement, time_interval)
@@ -222,10 +237,19 @@ def estimateFrequency(
     axis: int,
     axis_grid: NDArray,
     E_field: NDArray,
-    avg_window_size: int=8,
-    peak_cutoff: float=0.95,
+    peak_cutoff: float=0.95
 ) -> tuple[NDArray|float, float]:
-    assert avg_window_size >= 0, "Window size must be non-negative"
+    """Estimate frequency in some direction.
+
+    Args:
+        axis (int): Axis in which to perform FFT.
+        axis_grid (NDArray): Grid corresponding to FFT-axis.
+        E_field (NDArray): Electric field (at least 2D).
+        peak_cutoff (float, optional): Values around the peak to consider. Defaults to 0.95.
+
+    Returns:
+        tuple[NDArray|float, float]: Frequency and corresponding error.
+    """
     assert 0.0 <= peak_cutoff <= 1.0, "Peak cutoff must be non-negative and less than or equal to 1"
     assert -2 <= axis <= -1, "Expect axis layout with spatial and temporal dimension"
     assert E_field.ndim >= 2, "E-field needs at least space and time dimensions"
@@ -233,12 +257,6 @@ def estimateFrequency(
     fft = np.abs(np.fft.rfft(E_field, axis=axis)) ** 2
     mean_fft = np.mean(fft, axis=-2 if axis == -1 else -1)
     N = mean_fft.shape[-1]
-    # apply moving average if desired
-    if avg_window_size > 0:
-        mean_fft = np.cumsum(mean_fft, axis=-1)
-        mean_fft = (
-            mean_fft[...,avg_window_size:] - mean_fft[...,:-avg_window_size]
-        ) / avg_window_size
     # compute fractional index of peak center
     peak_index = np.apply_along_axis(
         lambda x: np.mean(np.nonzero(x > peak_cutoff * np.max(x, axis=-1))[0]),

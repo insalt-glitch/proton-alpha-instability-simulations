@@ -4,6 +4,7 @@ from enum import Enum
 from dataclasses import dataclass, field
 import physics
 from scipy import constants
+import math
 
 RESULTS_FOLDER = Path("/home/nilsm/simulation_data")
 ANALYSIS_FOLDER = Path(__file__).parent
@@ -104,6 +105,16 @@ class RunInfo:
         """Angular proton plasma frequency (Hz)
         """
         return self.proton.omega
+
+    @property
+    def c_s(self: SpeciesInfo) -> float:
+        """Ion acoustic speed (m/s)
+        """
+        si_proton_mass = self.proton.mass * constants.electron_mass
+        return math.sqrt(constants.electron_volt / si_proton_mass * (
+            1 * self.electron.temperature +
+            3 * self.proton.temperature
+        ))
 
     def __iter__(self: RunInfo):
         for species_info in [self.electron, self.proton, self.alpha]:
