@@ -226,7 +226,7 @@ def archiveDirectory(
         for sdf_file_path in sdf_files:
             sdf_file_path.unlink()
 
-def validatePathArgument(arg: str) -> Path:
+def _validatePathArgument(arg: str) -> Path:
     """Validates the argument of the given path.
 
     Args:
@@ -242,7 +242,7 @@ def validatePathArgument(arg: str) -> Path:
         raise argparse.ArgumentTypeError(f"'{path}' is not a directory")
     return path
 
-def validateNumProcs(arg: str) -> int:
+def _validateNumProcs(arg: str) -> int:
     if not arg.isdigit():
         raise argparse.ArgumentTypeError("Supply a positive number of processes")
     n_procs = int(arg)
@@ -251,7 +251,12 @@ def validateNumProcs(arg: str) -> int:
     return n_procs
 
 if __name__ == "__main__":
-    arg_parser = argparse.ArgumentParser()
+    # TODO: This entire thing seems stupid to deal with folders when we are really dealing with files??
+    arg_parser = argparse.ArgumentParser(
+        prog="h5vstack",
+        description="Converts all SDF-files in a folder to HDF5-files. "
+            "SDF-files are then archived and deleted. Grid mid-points are not saved."
+    )
     arg_parser.add_argument(
         "-r", "--recursive",
         help="Recursively convert SDF-files in all sub-directories. Defaults to off.",
@@ -264,7 +269,7 @@ if __name__ == "__main__":
     arg_parser.add_argument(
         "-p", "--procs",
         help="Number of processors to use. Defauts to the number of CPU-threads.",
-        type=validateNumProcs, default=process_cpu_count(), metavar=">=1"
+        type=_validateNumProcs, default=process_cpu_count(), metavar="N_PROCS>=1"
     )
     arg_parser.add_argument(
         "--overwrite",
@@ -277,16 +282,16 @@ if __name__ == "__main__":
         action="store_true"
     )
     arg_parser.add_argument(
-        "directories",
+        "FOLDER",
         help="Location of the simulation-data",
-        type=validatePathArgument, nargs='+'
+        type=_validatePathArgument, nargs='+'
     )
     args = arg_parser.parse_args()
 
     if args.recursive:
-        directories = sorted(sub_folder for folder in args.directories for sub_folder in folder.glob("**"))
+        directories = sorted(sub_folder for folder in args.FOLDER for sub_folder in folder.glob("**"))
     else:
-        directories = args.directories
+        directories = args.FOLDER
     directories = list(filter(lambda x: len(list(x.glob("*.sdf"))) > 0, directories))
     if len(directories) == 0:
         print("WARNING: No SDF-files found")
