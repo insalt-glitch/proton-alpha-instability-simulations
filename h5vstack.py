@@ -25,9 +25,9 @@ def createAttributeStore(src_file: h5py.File, num_files: int) -> dict[str, Any]:
     # Values should be numpy array or list of appropiate size [None] * time.size
     attr_store = {}
     for group_name in INFO_GROUPS:
-        assert group_name in src_file, f"Info group '{group_name}' does not exist."
+        assert group_name in src_file, f"Info group '{group_name}' does not exist in '{src_file.filename}'."
         h5_group = src_file[group_name]
-        assert len(h5_group.keys()) == 0, f"Info group '{group_name}' cannot contain objects."
+        assert len(h5_group.keys()) == 0, f"Info group '{group_name}' in '{src_file.filename}' cannot contain objects."
         for attr_name, attr_value in h5_group.attrs.items():
             # build unique key
             key = f"{group_name}/{attr_name}"
@@ -36,12 +36,12 @@ def createAttributeStore(src_file: h5py.File, num_files: int) -> dict[str, Any]:
             if isinstance(attr_value, str):
                 attr_store[key] = [None] * num_files
             else:
-                assert hasattr(attr_value, "dtype") and hasattr(attr_value, "shape"), "Expected numpy-like type"
+                assert hasattr(attr_value, "dtype") and hasattr(attr_value, "shape"), f"Expected numpy-like type of '{key}' in '{src_file.filename}'."
                 attr_store[key] = np.empty(shape=(num_files, *attr_value.shape), dtype=attr_value.dtype)
     return attr_store
 
 def createTargetDatasets(src_file: h5py.File, target_file: h5py.File, num_files: int) -> None:
-    assert target_file.mode == "r+", "Write permission on target-file required."
+    assert target_file.mode == "r+", f"Write permission on target-file '{target_file.filename}' required."
     assert num_files > 0, "Number of files must positive."
     # Recursively go through and create groups/datasets not in 'Header' or 'Run_info' or 'Grid'.
     # Assert that the groups do not have attributes. Copy the attributes from the other datasets
@@ -49,7 +49,7 @@ def createTargetDatasets(src_file: h5py.File, target_file: h5py.File, num_files:
         if any(name.startswith(group_name.removeprefix("/")) for group_name in INFO_GROUPS + CONSTANT_GROUPS):
             return
         if isinstance(h5_obj, h5py.Group):
-            assert len(h5_obj.attrs.keys()) == 0, f"Group '{name}' is not allowed to have attributes."
+            assert len(h5_obj.attrs.keys()) == 0, f"Group '{name}' in '{target_file.filename}' is not allowed to have attributes."
             return
         src_ds = h5_obj
         target_ds = target_file.create_dataset(
@@ -62,7 +62,7 @@ def createTargetDatasets(src_file: h5py.File, target_file: h5py.File, num_files:
     src_file.visititems(_createDatasets)
 
 def copyGridDatasets(src_file: h5py.File, target_file: h5py.File):
-    assert target_file.mode == "r+", "Write permission on target-file required."
+    assert target_file.mode == "r+", f"Write permission on target-file '{target_file.filename}' required."
     # Copy datasets in 'Grid' to new file as they are
     for group_name in CONSTANT_GROUPS:
         src_file.copy(
@@ -76,7 +76,7 @@ Data transfer
 --------------------------------------------------------------------------- """
 
 def copyDatasets(file_idx: int, src_file: h5py.File, target_file: h5py.File):
-    assert target_file.mode == "r+", "Write permission on target-file required."
+    assert target_file.mode == "r+", f"Write permission on target-file '{target_file.filename}' required."
     # For each file copy all datasets not in 'Header' or 'Run_info' or 'Grid'
     # assert that the attributes are the same and groups do not have attributes
     # assert that the dimensions are the same
@@ -85,14 +85,14 @@ def copyDatasets(file_idx: int, src_file: h5py.File, target_file: h5py.File):
         if any(name.startswith(group_name.removeprefix("/")) for group_name in INFO_GROUPS + CONSTANT_GROUPS):
             return
         # check conformity
-        assert name in target_file, f"Object '{name}' does not exist on target-file."
+        assert name in target_file, f"Object '{name}' in '{src_file.filename}' does not exist on target-file '{target_file.filename}'."
         if isinstance(h5_obj, h5py.Group):
-            assert len(h5_obj.attrs.keys()) == 0, f"Group '{name}' is not allowed to have attributes."
+            assert len(h5_obj.attrs.keys()) == 0, f"Group '{name}' in '{src_file.filename}' is not allowed to have attributes."
             return
         src_ds = h5_obj
         target_ds = target_file[name]
-        assert src_ds.shape == target_ds.shape[1:], f"Dimensions ({src_ds.shape} vs. {target_ds.shape[1:]} of '{name}' in '{src_ds.file.filename}' do not match."
-        assert src_ds.attrs == target_ds.attrs, f"Attributes of '{name}' in '{src_ds.file.filename}' do not match."
+        assert src_ds.shape == target_ds.shape[1:], f"Dimensions ({src_ds.shape} vs. {target_ds.shape[1:]} of '{name}' in '{src_file.filename}' do not match."
+        assert src_ds.attrs == target_ds.attrs, f"Attributes of '{name}' in '{src_file.filename}' do not match."
         # write data into target-file
         target_ds[file_idx] = src_ds
 
@@ -141,11 +141,10 @@ def writeAttributeStore(attr_store: dict[str, Any], target_file: h5py.File) -> N
         h5_group = target_file.require_group(group_name)
 
         if all(np.all(dataset[0] == entry) for entry in dataset):
-            assert attr_name not in h5_group.attrs, f"Attribute '{attr_name}' already exists in target file."
+            assert attr_name not in h5_group.attrs, f"Attribute '{attr_name}' already exists in target file '{target_file.filename}'."
             h5_group.attrs[attr_name] = dataset[0]
         else:
-            assert name not in target_file, f"Dataset '{name}' already exists in target file."
-            # NOTE: Do we need to explicitly set dtype=h5py.string_dtype()?
+            assert name not in target_file, f"Dataset '{name}' already exists in target file '{target_file.filename}'."
             h5_group[attr_name] = dataset
 
 """ ---------------------------------------------------------------------------
@@ -155,7 +154,7 @@ Main functions
 def combineHDF5FilesInDirectory(src_directory: Path, target_file: Path) -> None:
     assert src_directory.is_dir(), f"Source '{src_directory}' not a directory"
     assert src_directory.exists(), f"Source '{src_directory}' does not exist."
-    assert not target_file.exists(), f"Target file will not be overwritten."
+    assert not target_file.exists(), f"Target file '{target_file}' will not be overwritten."
 
     # initial setup
     src_files = sorted(src_directory.glob("*.h5"))
@@ -177,6 +176,10 @@ def combineHDF5FilesInDirectory(src_directory: Path, target_file: Path) -> None:
     with h5py.File(target_file, mode="r+") as h5_target:
         writeAttributeStore(attribute_store, h5_target)
 
+""" ---------------------------------------------------------------------------
+Command-line stuff
+--------------------------------------------------------------------------- """
+
 def _validateSrcPathArgument(arg: str) -> Path:
     """Validates the argument of the given path.
 
@@ -191,9 +194,9 @@ def _validateSrcPathArgument(arg: str) -> Path:
         raise argparse.ArgumentTypeError(f"Directory '{src_path}' does not exist")
     if not src_path.is_dir():
         raise argparse.ArgumentTypeError(f"'{src_path}' is not a directory")
-    return src_path
+    return src_path.absolute()
 
-def validateNumProcs(arg: str) -> int:
+def _validateNumProcs(arg: str) -> int:
     if not arg.isdigit():
         raise argparse.ArgumentTypeError("Supply a positive number of processes")
     n_procs = int(arg)
@@ -201,50 +204,84 @@ def validateNumProcs(arg: str) -> int:
         raise argparse.ArgumentTypeError("Need at least one process")
     return n_procs
 
-if __name__ == "__main__":
-    arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument(
+def _parseComandlineArgs() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="h5vstack",
+        description="Stacks datasets inside HDF5-files along a new dimension. "
+            "Attributes not part of groups specifed in INFO_GROUPS are assumed "
+            "to be the same (crash). Groups specified in CONSTANT_GROUPS will "
+            "only be copied once."
+    )
+    parser.add_argument(
         "-r", "--recursive",
         help="Recursively convert SDF-files in all sub-directories. Defaults to off.",
         action="store_true"
     )
-    arg_parser.add_argument(
+    parser.add_argument(
         "-p", "--procs",
         help="Number of processors to use. Defauts to the number of CPU-threads.",
-        type=validateNumProcs, default=process_cpu_count(), metavar=">=1"
+        type=_validateNumProcs, default=process_cpu_count(), metavar="N_PROCS>=1"
     )
-    # TODO: Compression would be nice but it cannot be applied while copying otherwise things take forever.
-    # arg_parser.add_argument(
-    #     "--compression",
-    #     help="Compression level for the HDF5-datasets. Defaults to 4.",
-    #     type=int, choices=range(10), default=4, metavar="0-9"
-    # )
-    # arg_parser.add_argument(
-    #     "--overwrite",
-    #     help="If set will overwrite existing files/archives otherwise these wil be skipped.",
-    #     action="store_true"
-    # )
-    arg_parser.add_argument(
-        "source_directory",
+    parser.add_argument_group()
+    group = parser.add_mutually_exclusive_group()
+    group.title = "Target-file options"
+    group.add_argument(
+        "--overwrite",
+        help="Overwrite existing target-files.",
+        action="store_true"
+    )
+    group.add_argument(
+        "--skip-existing",
+        help="Skip existing target-files.",
+        action="store_true"
+    )
+    parser.add_argument(
+        "FOLDER",
         help="Location of the simulation-data (HDF5)",
-        type=_validateSrcPathArgument
+        type=_validateSrcPathArgument, nargs="+"
     )
-    args = arg_parser.parse_args()
-    src_dirs: Path = [args.source_directory]
-    if args.recursive:
-        src_dirs = list(filter(lambda x: len(list(x.glob("*.h5"))) > 0, src_dirs[0].glob("**")))
-    target_dirs = [folder.with_suffix(".h5") for folder in src_dirs]
+    return parser.parse_args()
 
-    if len(src_dirs) > 1:
+def _prepareFiles(args: argparse.Namespace) -> tuple[list[Path], list[Path]]:
+    # look for files
+    if args.recursive:
+        src_dirs: list[Path] = sorted(
+            sub_folder for folder in args.FOLDER for sub_folder in folder.glob("**")
+        )
+    else:
+        src_dirs: list[Path] = args.FOLDER
+    src_dirs = list(set(filter(lambda x: len(list(x.glob("*.h5"))) > 1, src_dirs)))
+    target_files = [folder / f"{folder.name}.h5" for folder in src_dirs]
+    # check conformity with arguments
+    if any(file.exists() for file in target_files):
+        existing_target_files = [file for file in target_files if file.exists()]
+        if args.skip_existing:
+            # Filter src_dirs and target_files for existing files
+            src_dirs = [folder for folder, t in zip(src_dirs, target_files) if not t.exists()]
+            target_files = [t for t in target_files if not t.exists()]
+        elif args.overwrite:
+            # Remove exiting files
+            for t in existing_target_files: t.unlink()
+        else:
+            raise FileExistsError(
+                f"Overwrite (--overwrite) or skip (--skip-existing) files:\n"
+                f"{'\n'.join([str(f) for f in existing_target_files])}")
+    return src_dirs, target_files
+
+if __name__ == "__main__":
+    args = _parseComandlineArgs()
+    src_folders, target_files = _prepareFiles(args)
+
+    if len(src_folders) > 1:
         tqdm.set_lock(RLock())
         with ThreadPoolExecutor(
             max_workers=args.procs,
             initializer=tqdm.set_lock,
             initargs=(tqdm.get_lock(),)
         ) as pool:
-            futures = pool.map(combineHDF5FilesInDirectory, src_dirs, target_dirs)
-            list(tqdm(futures, desc="Directory", total=len(src_dirs)))
-    elif len(src_dirs) == 1:
-        combineHDF5FilesInDirectory(src_dirs[0], target_dirs[0])
+            futures = pool.map(combineHDF5FilesInDirectory, src_folders, target_files)
+            list(tqdm(futures, desc="Directory", total=len(src_folders)))
+    elif len(src_folders) == 1:
+        combineHDF5FilesInDirectory(src_folders[0], target_files[0])
     else:
-        print("WARNING: No directories with files to convert.")
+        print("INFO: No directories with files to convert.")
