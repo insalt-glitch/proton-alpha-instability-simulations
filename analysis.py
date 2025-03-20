@@ -8,7 +8,7 @@ from typing import Any
 from pathlib import Path
 import h5py
 
-from definitions import RunInfo, Species
+from basic import RunInfo, Species
 
 def fitGrowthRate(
     time: NDArray,
@@ -100,7 +100,7 @@ def fitGrowthRate(
         poly_turn_p[turn_p_idx]
     )
 
-def avgTemperatureFromMomentumDist(
+def avgTemperature1D(
     momentum_grid: NDArray,
     dist_x_px: NDArray,
     info: RunInfo,
@@ -121,6 +121,62 @@ def avgTemperatureFromMomentumDist(
     T_electron = P / (constants.electron_volt * n0)
 
     return T_electron
+
+def waveVector2D(
+    x_grid: NDArray,
+    y_grid: NDArray,
+    E_field: NDArray,
+    regime: slice = slice(None),
+) -> tuple[NDArray,NDArray]:
+    regime_E_field = E_field[regime]
+    k_x, k_x_err = estimateFrequency(
+        axis=-2,
+        axis_grid=x_grid,
+        E_field=regime_E_field,
+        n_spatial_dims=2
+    )
+    k_y, k_y_err = estimateFrequency(
+        axis=-1,
+        axis_grid=y_grid,
+        E_field=regime_E_field,
+        n_spatial_dims=2
+    )
+    k = np.array([k_x, k_y])
+    k_err = np.array([k_x_err, k_y_err])
+    return k, k_err
+
+def waveAngle2DFromWaveVector(
+    k: NDArray|list,
+    k_err: NDArray|list
+) -> tuple[NDArray|float,NDArray|float]:
+    assert len(k) == 2, "Expected 2D wave-vector"
+    assert len(k_err) == 2, "Expected componentwise error of 2D wave-vector"
+    k_x = k[0]
+    k_x_err = k_err[0]
+    k_y = k[1]
+    k_y_err = k_err[1]
+    # Compute wave-angle theta
+    theta = np.arctan(k_y / k_x)
+    # Compute wave-angle error (gaussian error propagation)
+    theta_err = np.sqrt(
+        (k_y / (k_x ** 2 + k_y ** 2)) ** 2 * k_x_err ** 2 +
+        (k_x / (k_x ** 2 + k_y ** 2)) ** 2 * k_y_err ** 2
+    )
+    return theta, theta_err
+
+def waveAngle2DFromElectricField(
+    E_field_x: NDArray,
+    E_field_y: NDArray,
+    regime: slice = slice(None)
+) -> tuple[NDArray|float,NDArray|float]:
+    E_rms_x = np.sqrt(np.mean(E_field_x[regime] ** 2))
+    E_rms_x_err = np.std(E_field_x[regime])  / np.sqrt(E_field_x.size)
+    E_rms_y = np.sqrt(np.mean(E_field_y[regime] ** 2))
+    E_rms_y_err = np.std(E_field_y[regime]) / np.sqrt(E_field_y.size)
+    return waveAngle2DFromWaveVector(
+        [E_rms_x, E_rms_y],
+        [E_rms_x_err, E_rms_y_err]
+    )
 
 def readFromRun(
     folder: Path,
@@ -237,6 +293,7 @@ def estimateFrequency(
     axis: int,
     axis_grid: NDArray,
     E_field: NDArray,
+    n_spatial_dims: int = 1,
     peak_cutoff: float=0.95
 ) -> tuple[NDArray|float, float]:
     """Estimate frequency in some direction.
@@ -251,18 +308,20 @@ def estimateFrequency(
         tuple[NDArray|float, float]: Frequency and corresponding error.
     """
     assert 0.0 <= peak_cutoff <= 1.0, "Peak cutoff must be non-negative and less than or equal to 1"
-    assert -2 <= axis <= -1, "Expect axis layout with spatial and temporal dimension"
-    assert E_field.ndim >= 2, "E-field needs at least space and time dimensions"
+    assert n_spatial_dims >= 0, "Number of spatial diemnsions must be positive"
+    assert -(n_spatial_dims + 1) <= axis <= -1, "Expect axis layout with spatial and temporal dimension"
+    assert E_field.ndim >= (n_spatial_dims + 1), "E-field needs at least space and time dimensions"
     dx = abs(axis_grid[1] - axis_grid[0])
     fft = np.abs(np.fft.rfft(E_field, axis=axis)) ** 2
-    mean_fft = np.mean(fft, axis=-2 if axis == -1 else -1)
-    N = mean_fft.shape[-1]
+    mean_axes = tuple(-(i+1) for i in range(n_spatial_dims+1) if i != -(axis + 1))
+    mean_fft = np.mean(fft, axis=mean_axes)
     # compute fractional index of peak center
     peak_index = np.apply_along_axis(
-        lambda x: np.mean(np.nonzero(x > peak_cutoff * np.max(x, axis=-1))[0]),
+        lambda x: np.argmax(x, axis=-1), # np.mean(np.nonzero(x > peak_cutoff * np.max(x, axis=-1))[0]),
         axis=-1,
         arr=mean_fft
     )
+    N = E_field.shape[axis]
     k = 2 * np.pi * peak_index / (dx * N)
-    k_err = 2 * np.pi / (np.sqrt(2) * dx * N)
+    k_err = 2 * np.pi * np.sqrt(2) / (dx * N)
     return k, k_err

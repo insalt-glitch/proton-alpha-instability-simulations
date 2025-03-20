@@ -1,66 +1,10 @@
 from __future__ import annotations
-from pathlib import Path
-from enum import Enum
-from dataclasses import dataclass, field
-import physics
-from scipy import constants
+from dataclasses import dataclass
 import math
 
-RESULTS_FOLDER = Path("/home/nilsm/simulation_data")
-ANALYSIS_FOLDER = Path(__file__).parent
+from scipy import constants
 
-FIGURES_FOLDER = ANALYSIS_FOLDER / "figures"
-MPLSTYLE_FILE = ANALYSIS_FOLDER / "plot_style.mplstyle"
-
-class Species(Enum):
-    ELECTRON = "Electrons"
-    PROTON   = "Protons"
-    ALPHA    = "Alphas"
-
-    def __eq__(self, other):
-        return self.value == other.value
-
-    def __hash__(self):
-        return self.value.__hash__()
-
-@dataclass
-class SpeciesInfo:
-    """Basic information about a species
-
-    Args:
-        number_density (float): Number density (m^-3)
-        temperature (float): Temperature (eV)
-        charge (float): Electric charge (electron-charge)
-        mass (float): Particle mass (electron-mass)
-        bulk_velocity (float): Bulk velocity (m/s)
-    """
-    # Number density (m^-3)
-    number_density: float
-    temperature: float
-    charge: float
-    mass: float
-    bulk_velocity: float
-
-    @property
-    def omega(self: SpeciesInfo) -> float:
-        """Angular plasma frequency (Hz)
-        """
-        return physics.plasmaFrequency(self.mass, self.number_density)
-
-    @property
-    def v_thermal(self: SpeciesInfo) -> float:
-        """Themal speed (m/s)
-        """
-        return physics.temperatureToThermalSpeed(
-            self.temperature, self.mass
-        )
-
-    @property
-    def p_thermal(self: SpeciesInfo) -> float:
-        """Thermal momentum (kg*m/s)
-        """
-        si_mass = self.mass * constants.electron_mass
-        return si_mass * self.v_thermal
+from . import physics, SpeciesInfo, Species
 
 @dataclass
 class RunInfo:

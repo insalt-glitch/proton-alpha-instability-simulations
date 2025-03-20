@@ -2,34 +2,43 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import constants, signal
+import h5py
 
 import analysis
-import physics
+from basic import physics
+from .settings import (
+    FIGURE_DPI,
+    FIGURE_FORMAT,
+    FIGURE_FULL_SIZE,
+    FIGURE_LINESTYLES,
+    generalSaveFigure
+)
 
-from definitions import (
+from basic.paths import (
     RESULTS_FOLDER,
     MPLSTYLE_FILE,
     FIGURES_FOLDER,
-    Species,
-    SpeciesInfo,
-    RunInfo
 )
+from basic import RunInfo, Species
 
-FIGURE_FORMAT = "svg"
-FIGURE_DPI = 200
-
+def _saveFigure(fig_name: str, sub_folder: str|None = None):
+    if sub_folder is None:
+        sub_folder = "simulation-1D"
+    else:
+        sub_folder = f"simulation-1D/{sub_folder}"
+    generalSaveFigure(fig_name, sub_folder)
 
 def electricFieldOverSpaceAndTime(
-    folder: Path,
+    data_file: Path,
     info: RunInfo,
     save: bool=False
 ):
-    time, (grid_edges, ex), _ = analysis.readFromRun(
-        folder,
-        ["Grid/grid", "Electric Field/ex"]
-    )
+    with h5py.File(data_file) as f:
+        time = f["Header/time"][:] * info.omega_pp
+        grid_edges = f["Grid/grid"][:]
+        ex = f["Electric Field/ex"][:]
+
     grid_edges = grid_edges[0] / info.lambda_D
-    time *= info.omega_pp
 
     plt.style.use(MPLSTYLE_FILE)
     plt.figure(figsize=(6,3.5))
@@ -42,26 +51,20 @@ def electricFieldOverSpaceAndTime(
     plt.xlim(0, 150)
     plt.tight_layout()
     if save:
-        FIGURES_FOLDER.mkdir(exist_ok=True)
-        plt.savefig(
-            FIGURES_FOLDER / f"e_field-vs-time-vs-space.{FIGURE_FORMAT}",
-            dpi=FIGURE_DPI, bbox_inches="tight"
-        )
-        plt.clf()
+        _saveFigure("e_field-vs-time-vs-space")
 
 def averageTemperature3DOverTime(
-    folder: Path,
+    data_file: Path,
     info: RunInfo,
     save: bool=False
 ):
-
-    time, (T_electron, T_proton, T_alpha), _ = analysis.readFromRun(
-        folder = folder,
-        dataset_names=[f"Derived/Temperature/{species.value}" for species in Species],
-        processElement=lambda x: physics.kelvinToElectronVolt(np.mean(x))
-    )
-    time *= info.omega_pp
-
+    with h5py.File(data_file) as f:
+        time = f["Header/time"][:] * info.omega_pp
+        T_electron, T_proton, T_alpha = [
+            physics.kelvinToElectronVolt(
+                np.mean(f[f"Derived/Temperature/{species.value}"][:], axis=1)
+            ) for species in Species
+        ]
     plt.style.use(MPLSTYLE_FILE)
     plt.figure()
     plt.plot(time, T_electron, ls="--", label="$T_e$")
@@ -72,15 +75,10 @@ def averageTemperature3DOverTime(
     plt.legend(loc="center left", fontsize=14)
     plt.xlim(time[0], time[-1])
     if save:
-        FIGURES_FOLDER.mkdir(exist_ok=True)
-        plt.savefig(
-            FIGURES_FOLDER / f"avg_temp3d-vs-time.{FIGURE_FORMAT}",
-            dpi=FIGURE_DPI, bbox_inches="tight"
-        )
-        plt.clf()
+        _saveFigure("avg_temp3d-vs-time")
 
 def velocityDistributionOverTime(
-    folder: Path,
+    data_file: Path,
     info: RunInfo,
     species: Species,
     save: bool=False
@@ -95,21 +93,16 @@ def velocityDistributionOverTime(
         Species.PROTON  : "p",
         Species.ALPHA   : "\\alpha",
     }
-    time, (dist,), _ = analysis.readFromRun(
-        folder=folder, processElement=lambda x: np.mean(x, axis=0),
-        dataset_names=[f"/dist_fn/x_px/{species.value}"]
-    )
-    time *= info.omega_pp
+    with h5py.File(data_file) as f:
+        time = f["Header/time"][:] * info.omega_pp
+        dist = np.mean(f[f"/dist_fn/x_px/{species.value}"][:], axis=1)
+        px_grid = f[f"Grid/x_px/{species.value}/Px"][:]
 
-    _, (grid,), _ = analysis.readFromRun(
-        folder=folder, time_interval=0,
-        dataset_names=[f"Grid/x_px/{species.value}/Px"],
-    )
     plt.style.use(MPLSTYLE_FILE)
     species_info = info[species]
-    normalized_grid = grid / species_info.p_thermal
+    normalized_grid = px_grid / species_info.p_thermal
     dx = 0.5 * info.lambda_D
-    dv = (grid[1] - grid[0]) / (species_info.mass * constants.electron_mass)
+    dv = (px_grid[1] - px_grid[0]) / (species_info.mass * constants.electron_mass)
     dist = dist.T / (dx * dv)
     dist[dist<=0] = np.min(dist[dist>0])
 
@@ -121,26 +114,18 @@ def velocityDistributionOverTime(
     plt.ylim(*Y_LIM[species])
     plt.tight_layout()
     if save:
-        FIGURES_FOLDER.mkdir(exist_ok=True)
-        plt.savefig(
-            FIGURES_FOLDER / f"velocity_dist-vs-time_{species.value}.{FIGURE_FORMAT}",
-            dpi=FIGURE_DPI, bbox_inches="tight"
-        )
-        plt.clf()
+        _saveFigure(f"velocity_dist-vs-time_{species.value}")
 
 def electricFieldEnergyOverTime(
-    folder: Path,
+    data_file: Path,
     info: RunInfo,
     show_fit: bool=True,
     save: bool=False
 ):
-    time, (energy,), _ = analysis.readFromRun(
-        folder=folder, processElement=lambda x: np.mean(np.array(x) ** 2),
-        dataset_names=["/Electric Field/ex"]
-    )
-    # convert types and normalize
-    time *= info.omega_pp
-    energy *= (constants.epsilon_0 / 2) / (constants.electron_volt)
+    with h5py.File(data_file) as f:
+        time = f["Header/time"][:] * info.omega_pp
+        energy = np.mean(f["Electric Field/ex"][:] ** 2, axis=1) * (constants.epsilon_0 / 2) / (constants.electron_volt)
+
     fit_result = analysis.fitGrowthRate(time, energy)
 
     plt.style.use(MPLSTYLE_FILE)
@@ -174,12 +159,7 @@ def electricFieldEnergyOverTime(
     plt.ylabel("Energy $W_E$ (eV$\\,/\\,$m$^3$)")
     plt.legend()
     if save:
-        FIGURES_FOLDER.mkdir(exist_ok=True)
-        plt.savefig(
-            FIGURES_FOLDER / f"e_field_energy-vs-time.{FIGURE_FORMAT}",
-            dpi=FIGURE_DPI, bbox_inches="tight"
-        )
-        plt.clf()
+        _saveFigure("e_field_energy-vs-time")
 
 def multiElectricFieldEnergyOverTime(
     folder: Path,
