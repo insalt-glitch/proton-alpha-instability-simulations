@@ -1,5 +1,5 @@
 ##
-##  MATPLOTLIBRC FORMAT file (Nils Mueller | nils.n.mueller@gmail.com)
+##  MATPLOTLIBRC FORMAT file (Nils Müller | nilsmu@chalmers.se)
 ##
 ##  This file provides a basic format configuration for all plots performed in
 ##  python. The default settings can be found here:
@@ -7,49 +7,49 @@
 ##  This file overrides all settings in the default RC-file of matplotlib when
 ##  activated and is not complete. If you want to use this in your own project,
 ##  after including matplotlib you can use
-##  "matplotlib.pyplot.style.use('plot_style.mplstyle')" when both files are
+##  "matplotlib.pyplot.style.use('bachelor_thesis.mplstyle')" when both files are
 ##  in the same location.
 ##
 
 # general settings
-figure.figsize: 6.4, 4.4
-axes.labelsize: 14
+figure.figsize: 5.9, 4.2
+axes.labelsize: 11
 axes.titlesize: 9.6
-axes.linewidth: 1.5
-axes.prop_cycle: cycler(color=['e69f00', '56b4e9', '009e73', 'cc79a7','d55e00','0072b2',  'f0e442'], linestyle=['solid', 'dotted', 'dashed', 'dashdot', 'solid', 'dashed','dotted'])
-
+axes.linewidth: 1.2
+axes.prop_cycle: cycler(color=["67001f","b2182b","d6604d","f4a582","c9a996","71838D","92c5de","4393c3","2166ac","053061"], linestyle=['solid', (0, (1, 1)), (0, (5, 2)), (0, (5, 1, 1, 1, 1, 1)), (0, (5, 1, 1, 1)), (0, (2,1,2,1,2,3)), (0, (1, 1, 1, 3)), (3,(8,1,8,1)), (0,(5,1,1,1,5,1,1,1,1,1)), (3,1,3,1,1,1,1,1)])
 
 # fonts
 font.family: serif
 font.weight: normal
-font.size: 14
-legend.fontsize: 13
+font.size: 11
+legend.fontsize: 11
 
 grid.linewidth: 0.8
-lines.linewidth: 2.3
+lines.linewidth: 1.8
 lines.markeredgewidth: 0.0
 lines.markersize: 6
 patch.linewidth: 0.24
 
 # Tick formatting
 xtick.major.pad: 5.6
-xtick.major.size: 7
+xtick.major.size: 5
 xtick.major.width: 1.2
-xtick.minor.size: 4
+xtick.minor.size: 3.5
 xtick.minor.width: 0.8
 xtick.direction: in
 xtick.top: True
 xtick.bottom: True
 
 ytick.major.pad: 5.6
-ytick.major.size: 7
+ytick.major.size: 5
 ytick.major.width: 1.2
-ytick.minor.size: 4
+ytick.minor.size: 3.5
 ytick.minor.width: 0.8
 ytick.direction: in
 ytick.left: True
 ytick.right: True
 
 # legend
-legend.borderaxespad: 0.5
+legend.borderaxespad: 1.0
 legend.framealpha: 0.9
+legend.fancybox: False

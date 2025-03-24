@@ -10,3 +10,14 @@ class Species(Enum):
 
     def __hash__(self):
         return self.value.__hash__()
+
+    def symbol(self) -> str:
+        """Get superscript/subscript symbol for LaTeX.
+        """
+        SYMBOLS = {
+            Species.ELECTRON: "e",
+            Species.PROTON  : "p",
+            Species.ALPHA   : "\\alpha",
+        }
+        assert self in SYMBOLS, "What is going on?"
+        return SYMBOLS.get(self)

@@ -8,7 +8,7 @@ from typing import Any
 from pathlib import Path
 import h5py
 
-from basic import RunInfo, Species
+from basic import RunInfo, Species, SpeciesInfo
 
 def fitGrowthRate(
     time: NDArray,
@@ -100,27 +100,122 @@ def fitGrowthRate(
         poly_turn_p[turn_p_idx]
     )
 
-def avgTemperature1D(
-    momentum_grid: NDArray,
-    dist_x_px: NDArray,
-    info: RunInfo,
-    species: Species
-) -> NDArray:
-    s_info = info[species]
+def _numberDensity1D(v: NDArray, f_v: NDArray) -> float:
+    n0 = np.trapezoid(x=v, y=f_v, axis=-1)
+    return n0
 
-    dx = 0.5 * info.lambda_D
-    dV = (momentum_grid[1] - momentum_grid[0]) / (s_info.mass * constants.electron_mass)
+def _flowVelocity1D(v: NDArray, f_v: NDArray) -> NDArray:
+    n0 = _numberDensity1D(v, f_v)
+    u = np.trapezoid(x=v, y=v * f_v, axis=-1) / n0
+    return u
 
-    f_boltz = dist_x_px / (dV * dx)
-    v = momentum_grid / (s_info.mass * constants.electron_mass)
-    n0 = np.trapezoid(x=v, y=f_boltz, axis=-1)
-    u = np.trapezoid(x=v, y=v * f_boltz, axis=-1) / n0
-    P = s_info.mass * constants.electron_mass * np.trapezoid(
-        x=v, y=(u[...,np.newaxis] - v) ** 2 * f_boltz, axis=-1
+def _pressureTensor1D(v: NDArray, f_v: NDArray, mass: float) -> NDArray:
+    u = _flowVelocity1D(v, f_v)
+    P = mass * np.trapezoid(
+        x=v, y=(u[...,np.newaxis] - v) ** 2 * f_v, axis=-1
     )
-    T_electron = P / (constants.electron_volt * n0)
+    return P
 
+def _temperature1D(v: NDArray, f_v: NDArray, mass: float) -> NDArray:
+    n0 = _numberDensity1D(v, f_v)
+    P = _pressureTensor1D(v, f_v, mass)
+    T_electron = P / (constants.electron_volt * n0)
     return T_electron
+
+def normalizeDistributionXPx(
+    x_grid: NDArray,
+    px_grid: NDArray,
+    dist_x_px: NDArray,
+    info: SpeciesInfo,
+) -> tuple[NDArray,NDArray]:
+    v = px_grid / (info.si_mass)
+    dx = x_grid[1] - x_grid[0]
+    dv_x = v[1] - v[0]
+    f_v = dist_x_px / (dv_x * dx)
+    return v, f_v
+
+def numberDensity1D(
+    x_grid: NDArray,
+    px_grid: NDArray,
+    dist_x_px: NDArray,
+    info: SpeciesInfo,
+) -> float:
+    v, f_v = normalizeDistributionXPx(x_grid, px_grid, dist_x_px, info)
+    return _numberDensity1D(v, f_v)
+
+def flowVelocity1D(
+    x_grid: NDArray,
+    px_grid: NDArray,
+    dist_x_px: NDArray,
+    info: SpeciesInfo,
+) -> NDArray:
+    v, f_v = normalizeDistributionXPx(x_grid, px_grid, dist_x_px, info)
+    return _flowVelocity1D(v, f_v)
+
+def pressureTensor1D(
+    x_grid: NDArray,
+    px_grid: NDArray,
+    dist_x_px: NDArray,
+    info: SpeciesInfo,
+) -> float:
+    v, f_v = normalizeDistributionXPx(x_grid, px_grid, dist_x_px, info)
+    return _pressureTensor1D(v, f_v, info.mass)
+
+def temperature1D(
+    x_grid: NDArray,
+    px_grid: NDArray,
+    dist_x_px: NDArray,
+    info: SpeciesInfo,
+) -> NDArray:
+    v, f_v = normalizeDistributionXPx(x_grid, px_grid, dist_x_px, info)
+    return _temperature1D(v, f_v, info.si_mass)
+
+def normalizeDistribution2D(
+    x_grid: NDArray,
+    y_grid: NDArray,
+    px_grid: NDArray,
+    py_grid: NDArray,
+    dist_px_py: NDArray,
+    info: SpeciesInfo,
+) -> tuple[NDArray,NDArray,NDArray]:
+    v_x = px_grid / info.si_mass
+    v_y = py_grid / info.si_mass
+    dv_x = v_x[1] - v_x[0]
+    dv_y = v_y[1] - v_y[0]
+    length_x = abs(x_grid[-1] - x_grid[0])
+    length_y = abs(y_grid[-1] - y_grid[0])
+    f_v = dist_px_py / (dv_x * dv_y * length_x * length_y) # s^2/m^4
+    return v_x, v_y, f_v
+
+def _numberDensity2D(v_x, v_y, f_v):
+    n0 = np.trapezoid(
+        x=v_x,
+        y=np.trapezoid(x=v_y, y=f_v, axis=-1),
+        axis=-1,
+    )
+    return n0
+
+def _flowVelocity2D(v_x, v_y, f_v):
+    n0 = _numberDensity2D(v_x, v_y, f_v)
+    u = np.trapezoid(
+        x=v_x,
+        y=v_x * np.trapezoid(x=v_y, y=v_y * f_v, axis=-1),
+        axis=-1,
+    ) / n0
+    return u
+
+def flowVelocity2D(
+    x_grid: NDArray,
+    y_grid: NDArray,
+    px_grid: NDArray,
+    py_grid: NDArray,
+    dist_px_py: NDArray,
+    info: SpeciesInfo,
+) -> NDArray:
+    v_x, v_y, f_v = normalizeDistribution2D(
+        x_grid, y_grid, px_grid, py_grid, dist_px_py, info,
+    )
+    return _flowVelocity2D(v_x, v_y, f_v)
 
 def waveVector2D(
     x_grid: NDArray,
@@ -178,13 +273,13 @@ def waveAngle2DFromElectricField(
         [E_rms_x_err, E_rms_y_err]
     )
 
-def readFromRun(
+def readFromVariation(
     folder: Path,
     dataset_names: list[str],
-    processElement: Callable[[h5py.Dataset], ArrayLike]|None=None,
+    processElement: Callable[[h5py.Dataset], ArrayLike]=lambda x: x,
     time_interval: slice|int=slice(None),
     recursive: bool=False,
-) -> tuple[NDArray, tuple[NDArray,...], tuple[Path]]:
+) -> tuple[NDArray, list[NDArray], list[Path]]:
     """Extracts specified datasets from a single simulation run.
 
     Args:
@@ -196,7 +291,7 @@ def readFromRun(
             Defaults to slice(None).
         recursive (bool): Whether to recursively read all sub-folders. Defaults to False.
     Returns:
-        tuple[NDArray,tuple[NDArray,...],list[Path]]: Time first, then datasets in the same
+        tuple[NDArray,list[NDArray,...],list[Path]]: Time first, then datasets in the same
             order as provided. Finally, the folder(s) that contain the simulation data are
             returned.
     """
@@ -210,30 +305,24 @@ def readFromRun(
     files = sorted(folder.glob("*.h5"))
     assert len(files) > 0, f"ERROR: No files in directory '{folder}'"
     if len(dataset_names) == 0:
-        print("WARNING: No quantities selected")
-
-    if processElement is None:
-        processElement = lambda x: np.squeeze(x)
+        print("WARNING: No datasets selected")
 
     if isinstance(time_interval, int):
-        file_idx = time_interval
-        quantities = []
-        with h5py.File(files[file_idx]) as h5_file:
-            time = np.array(h5_file["Header"].attrs["time"])
-            for i, key in enumerate(dataset_names):
-                quantities.append(processElement(h5_file[key]))
-        return time, (q for q in quantities), [folder]
+        time_interval = slice(time_interval, time_interval+1)
 
-    time = np.empty(len(files[time_interval]))
     quantities = [[] for _ in dataset_names]
 
-    for file_idx, file_path in enumerate(files[time_interval]):
+    for file_idx, file_path in enumerate(files):
         with h5py.File(file_path) as h5_file:
-            time[file_idx] = h5_file["Header"].attrs["time"][()]
-
+            if file_idx == 0:
+                time = h5_file["Header/time"][time_interval]
+            else:
+                assert np.all(time == h5_file["Header/time"][time_interval]), "Time has to be the same across all simulations but differs for '{files[0]}' and '{file_path}'"
             for i, key in enumerate(dataset_names):
-                quantities[i].append(processElement(h5_file[key]))
-    return time, (np.array(q) for q in quantities), [folder]
+                quantities[i].append(
+                    processElement(np.squeeze(h5_file[key][time_interval]))
+                )
+    return time, [np.array(q) for q in quantities], [folder]
 
 def _readFromMultipleRuns(
     folder: Path,
@@ -258,7 +347,7 @@ def _readFromMultipleRuns(
     """
     files = sorted(folder.glob("*.h5"))
     if len(files) > 0:
-        return readFromRun(folder, dataset_names, processElement, time_interval)
+        return readFromVariation(folder, dataset_names, processElement, time_interval)
 
     sub_folders = sorted(
         path for path in folder.iterdir()
@@ -273,7 +362,7 @@ def _readFromMultipleRuns(
             folder_path, dataset_names, processElement, time_interval
         )
         time_runs.append(time)
-        quantities_runs.append(list(quantities))
+        quantities_runs.append(quantities)
         folders_runs.append(folders)
     # Make sure that the format is the same across runs
     assert all(time_runs[0].shape == t.shape for t in time_runs), "Times have to match across runs"

@@ -6,18 +6,13 @@ import h5py
 
 import analysis
 from basic import physics
-from .settings import (
-    FIGURE_DPI,
-    FIGURE_FORMAT,
-    FIGURE_FULL_SIZE,
-    FIGURE_LINESTYLES,
-    generalSaveFigure
-)
+from .general import generalSaveFigure, plotEnergyEFieldOverTime
 
 from basic.paths import (
     RESULTS_FOLDER,
+    FOLDER_1D,
+    PARTICLE_VARIATION_FOLDER,
     MPLSTYLE_FILE,
-    FIGURES_FOLDER,
 )
 from basic import RunInfo, Species
 
@@ -42,7 +37,8 @@ def electricFieldOverSpaceAndTime(
 
     plt.style.use(MPLSTYLE_FILE)
     plt.figure(figsize=(6,3.5))
-    plt.pcolormesh(time, grid_edges, ex[:-1].T, cmap="bwr", rasterized=True)
+    plt.pcolormesh(time, grid_edges, ex[:-1].T, cmap="bwr", rasterized=True,
+                   vmin=-np.max(np.abs(ex)), vmax=np.max(np.abs(ex)))
     plt.colorbar(label="Electric field E (V/m)")
     plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
     plt.ylabel("Position n / $\\lambda_D$ (1)")
@@ -102,7 +98,7 @@ def velocityDistributionOverTime(
     species_info = info[species]
     normalized_grid = px_grid / species_info.p_thermal
     dx = 0.5 * info.lambda_D
-    dv = (px_grid[1] - px_grid[0]) / (species_info.mass * constants.electron_mass)
+    dv = (px_grid[1] - px_grid[0]) / (species_info.si_mass)
     dist = dist.T / (dx * dv)
     dist[dist<=0] = np.min(dist[dist>0])
 
@@ -116,48 +112,20 @@ def velocityDistributionOverTime(
     if save:
         _saveFigure(f"velocity_dist-vs-time_{species.value}")
 
-def electricFieldEnergyOverTime(
+def energyEFieldOverTime(
     data_file: Path,
     info: RunInfo,
-    show_fit: bool=True,
+    show_fit_details: bool=True,
     save: bool=False
 ):
     with h5py.File(data_file) as f:
         time = f["Header/time"][:] * info.omega_pp
         energy = np.mean(f["Electric Field/ex"][:] ** 2, axis=1) * (constants.epsilon_0 / 2) / (constants.electron_volt)
 
-    fit_result = analysis.fitGrowthRate(time, energy)
-
     plt.style.use(MPLSTYLE_FILE)
     plt.figure()
-    plt.plot(time, energy, alpha=0.7, label="Simulation data")
-    if show_fit and fit_result is not None:
-        lin_fit, fit_interval, poly_info = fit_result
-        poly, extrema, turn_p = poly_info
-        plt.plot(extrema, np.exp(poly(extrema)),
-                color="lightblue",zorder=10, ls="", alpha=0.8,
-                marker="o", markeredgecolor="black", markeredgewidth=1, markersize=10,
-                label="Extrema")
-        plt.plot(turn_p, np.exp(poly(turn_p)),
-                color="red", zorder=10, ls="", marker="p",
-                markersize=10, markeredgecolor="black", markeredgewidth=1,
-                label="Turning point")
-        plt.plot(time[slice(*fit_interval)], energy[slice(*fit_interval)],
-                color="blue", lw=2, ls="solid", zorder=3, alpha=0.6,
-                label="Linear regime")
-        plt.plot(time, np.exp(lin_fit.slope * time + lin_fit.intercept),
-                ls=":", color="black", zorder=9,
-                label="$W_{E}\\propto\\exp(2\\gamma\\,t)$")
-        plt.plot(time, np.exp(poly(time)),
-            color="black", lw=1, ls="-.", zorder=2, alpha=0.8,
-            label="Polynomial fit")
-    plt.xlim(0, 150)
+    plotEnergyEFieldOverTime(time, energy, show_fit_details=show_fit_details)
     plt.ylim(1e4, 1e7)
-    plt.xticks(np.linspace(0.0, 150.0, num=6))
-    plt.yscale("log")
-    plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
-    plt.ylabel("Energy $W_E$ (eV$\\,/\\,$m$^3$)")
-    plt.legend()
     if save:
         _saveFigure("e_field_energy-vs-time")
 
@@ -167,10 +135,10 @@ def multiElectricFieldEnergyOverTime(
     identifer: str|None=None,
     save: bool=False
 ):
-    time, (energies,), _ = analysis.readFromRun(
+    time, (energies,), _ = analysis.readFromVariation(
         folder=folder,
         dataset_names=["/Electric Field/ex"],
-        processElement=lambda x: np.mean(np.array(x) ** 2),
+        processElement=lambda x: np.mean(np.array(x) ** 2, axis=1),
         recursive=True
     )
     # fix units of time and energy
@@ -184,24 +152,12 @@ def multiElectricFieldEnergyOverTime(
         fit_result = analysis.fitGrowthRate(time, W_E)
         if fit_result is not None:
             lin_fit, fit_interval, poly_info = fit_result
-            poly, extrema, turn_p = poly_info
-            plt.plot(extrema, np.exp(poly(extrema)),
-                    color="lightblue", zorder=10, ls="", alpha=0.8,
-                    marker="o", markeredgecolor="black", markeredgewidth=1, markersize=10,
-                    label="Extrema" if is_first_fit else None)
-            plt.plot(turn_p, np.exp(poly(turn_p)),
-                    color="red", zorder=10, ls="", marker="p",
-                    markersize=10, markeredgecolor="black", markeredgewidth=1,
-                    label="Turning point" if is_first_fit else None)
             plt.plot(time[slice(*fit_interval)], W_E[slice(*fit_interval)],
                     color="blue", lw=2, ls="solid", zorder=3, alpha=0.6,
                     label="Linear regime" if is_first_fit else None)
             plt.plot(time, np.exp(lin_fit.slope * time + lin_fit.intercept),
                     ls=":", color="black", zorder=9,
                     label="$W_{E}\\propto\\exp(2\\gamma\\,t)$" if is_first_fit else None)
-            plt.plot(time, np.exp(poly(time)),
-                    color="black", lw=1, ls="-.", zorder=2, alpha=0.8,
-                    label= "Polynomial fit" if is_first_fit else None)
             is_first_fit = False
         plt.plot(time, W_E, alpha=0.6, label=f"Run {run_idx}", zorder=1)
 
@@ -216,12 +172,7 @@ def multiElectricFieldEnergyOverTime(
         fancybox=False, labelspacing=0.4, columnspacing=1
     )
     if save:
-        FIGURES_FOLDER.mkdir(exist_ok=True)
-        plt.savefig(
-            FIGURES_FOLDER / f"e_field_energy-vs-time_{identifer}.{FIGURE_FORMAT}",
-            dpi=FIGURE_DPI, bbox_inches="tight"
-        )
-        plt.clf()
+        _saveFigure(f"e_field_energy-vs-time_{identifer}", "particles_per_cell")
     else:
         plt.title(identifer)
 
@@ -229,25 +180,23 @@ def particleVariationGrowthRate(
     info: RunInfo,
     save: bool=False
 ):
-    time, (energies,), folders = analysis.readFromRun(
-        folder=RESULTS_FOLDER / "particle_variation",
+    time, (energies,), folders = analysis.readFromVariation(
+        folder=PARTICLE_VARIATION_FOLDER,
         dataset_names=["/Electric Field/ex"],
-        processElement=lambda x: np.mean(np.array(x) ** 2),
+        processElement=lambda x: np.mean(np.array(x) ** 2, axis=1),
         time_interval=slice(0,751),
         recursive=True
     )
-    p8192_time, (p8192_energy,), _ = analysis.readFromRun(
-        folder=RESULTS_FOLDER / "proton-alpha-instability-1D",
-        dataset_names=["/Electric Field/ex"],
-        processElement=lambda x: np.mean(np.array(x) ** 2),
-    )
-    # fix units of time and energy
+    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
+        p8192_time = f["Header/time"][:]
+        p8192_energy = np.mean(f["Electric Field/ex"][:] ** 2, axis=1)
+
     time *= info.omega_pp
     energies *= constants.epsilon_0 / (2.0 * constants.electron_volt)
     p8192_time *= info.omega_pp
     p8192_energy *= constants.epsilon_0 / (2.0 * constants.electron_volt)
     # extract particle numbers
-    particle_numbers = np.array([int(pfs[0][0].parent.stem[-4:]) for pfs in folders])
+    particle_numbers = np.array([int(pfs[0].stem[-4:]) for pfs in folders])
     # extract growth rates from fits
     fits = [[analysis.fitGrowthRate(time, W_E) for W_E in es] for es in energies]
     p8192_growth_rate = analysis.fitGrowthRate(p8192_time, p8192_energy)[0].slope / 2
@@ -260,7 +209,6 @@ def particleVariationGrowthRate(
         particle_numbers, growth_rates_mean, yerr=growth_rates_std, ls="", label="Simulation",
         marker="p", markersize=8, markeredgecolor="black", markeredgewidth=1,
     )
-
     plt.plot(
         8192, p8192_growth_rate, ls="",
         marker="p", markersize=8, markeredgecolor="black", markeredgewidth=1
@@ -279,34 +227,28 @@ def particleVariationGrowthRate(
     plt.ylabel("Growth rate $\\gamma\\,/\\,\\omega_{pp}$ (1)")
     plt.legend(loc="lower right")
     if save:
-        save_folder = FIGURES_FOLDER / "particle_variation"
-        save_folder.mkdir(exist_ok=True)
-        plt.savefig(
-            save_folder / f"growth_rate-vs-num_particles.{FIGURE_FORMAT}",
-            dpi=FIGURE_DPI, bbox_inches="tight"
-        )
-        plt.clf()
+        _saveFigure("growth_rate-vs-num_particles", "particles_per_cell")
 
 def particleVariationTemperature3D(
     species: Species,
     save: bool=False
 ):
-    _, (temperatures,), folders = analysis.readFromRun(
-        folder=RESULTS_FOLDER / "particle_variation",
+    _, (temperatures,), folders = analysis.readFromVariation(
+        folder=PARTICLE_VARIATION_FOLDER,
         dataset_names=[f"Derived/Temperature/{species.value}"],
-        processElement=lambda x: physics.kelvinToElectronVolt(np.mean(x)),
+        processElement=lambda x: physics.kelvinToElectronVolt(np.mean(x, axis=1)),
         recursive=True
     )
-    _, (p8192_temperature,), _ = analysis.readFromRun(
-        folder=RESULTS_FOLDER / "proton-alpha-instability-1D",
-        dataset_names=[f"Derived/Temperature/{species.value}"],
-        processElement=lambda x: physics.kelvinToElectronVolt(np.mean(x)),
-        time_interval=slice(0, temperatures.shape[-1])
-    )
+    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
+        p8192_temperature = physics.kelvinToElectronVolt(np.mean(
+            f[f"Derived/Temperature/{species.value}"][:temperatures.shape[-1]],
+            axis=1
+        ))
     # extract particle numbers
-    particle_numbers = np.array([int(pfs[0][0].parent.stem[-4:]) for pfs in folders])
+    particle_numbers = np.array([int(pfs[0].stem[-4:]) for pfs in folders])
     # compute quantities of interest
     temperatures = np.mean(temperatures[:,:,-20:], axis=-1)
+    print(temperatures)
     mean_T = np.mean(temperatures, axis=1)
     std_T = np.std(temperatures, axis=1)
     p8192_T = np.mean(p8192_temperature[-20:])
@@ -320,15 +262,9 @@ def particleVariationTemperature3D(
     plt.xscale("log", base=2)
     plt.xlabel("Simulated particles per cell")
     plt.ylabel("Temperature $T_{final}$ (eV)")
-    plt.xlim(0, 2 ** 14)
+    plt.xlim(2 ** 4, 2 ** 14)
     if save:
-        save_folder = FIGURES_FOLDER / "particle_variation"
-        save_folder.mkdir(exist_ok=True)
-        plt.savefig(
-            save_folder / f"temperature_3D-vs-num_particles_{species.value}.{FIGURE_FORMAT}",
-            dpi=FIGURE_DPI, bbox_inches="tight"
-        )
-        plt.clf()
+        _saveFigure(f"temperature_3D-vs-num_particles_{species.value}", "particles_per_cell")
     else:
         plt.title(species)
 
@@ -337,17 +273,16 @@ def particleVariationEnergyVsTime(
     save: bool=False
 ):
     particle_numbers = []
-    time, (energies,), folders = analysis.readFromRun(
-        folder=RESULTS_FOLDER / "particle_variation",
+    time, (energies,), folders = analysis.readFromVariation(
+        folder=PARTICLE_VARIATION_FOLDER,
         dataset_names=["/Electric Field/ex"],
-        processElement=lambda x: np.mean(np.array(x) ** 2),
+        processElement=lambda x: np.mean(np.array(x) ** 2, axis=1),
         recursive=True
     )
-    p8192_time, (p8192_energy,), _ = analysis.readFromRun(
-        folder=RESULTS_FOLDER / "proton-alpha-instability-1D",
-        dataset_names=["/Electric Field/ex"],
-        processElement=lambda x: np.mean(np.array(x) ** 2),
-    )
+    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
+        p8192_time = f["Header/time"][:]
+        p8192_energy = np.mean(f["Electric Field/ex"][:] ** 2, axis=1)
+
     # fix units of time and energy
     time *= info.omega_pp
     energies *= constants.epsilon_0 / (2.0 * constants.electron_volt)
@@ -359,7 +294,7 @@ def particleVariationEnergyVsTime(
     p8192_energy = np.cumsum(p8192_energy)
     p8192_energy = (p8192_energy[10:] - p8192_energy[:-10]) / 10
     # extract particle numbers
-    particle_numbers = np.array([int(pfs[0][0].parent.stem[-4:]) for pfs in folders])
+    particle_numbers = np.array([int(pfs[0].stem[-4:]) for pfs in folders])
     plt.style.use("plot_style.mplstyle")
     plt.figure()
     for num_p, W_E in zip(particle_numbers, energies):
@@ -374,13 +309,7 @@ def particleVariationEnergyVsTime(
     plt.xlim(time[0], time[-1])
     plt.xticks(np.linspace(0, 150, 6))
     if save:
-        save_folder = FIGURES_FOLDER / "particle_variation"
-        save_folder.mkdir(exist_ok=True)
-        plt.savefig(
-            save_folder / f"avg_e_field_energy-vs-time-vs-num_particles.{FIGURE_FORMAT}",
-            dpi=FIGURE_DPI, bbox_inches="tight"
-        )
-        plt.clf()
+        _saveFigure("avg_e_field_energy-vs-time-vs-num_particles", "particles_per_cell")
 
 def particleVariationTemperatureXDiff(
     info: RunInfo,
@@ -392,41 +321,39 @@ def particleVariationTemperatureXDiff(
         Species.PROTON: 14.5 - 3,
         Species.ALPHA: 50 - 12
     }
-    time, (dist,), folders = analysis.readFromRun(
-        folder = RESULTS_FOLDER / "particle_variation",
-        dataset_names=[f"/dist_fn/x_px/{species.value}"],
-        processElement=lambda x: np.mean(x, axis=0),
+    time, (dist,), folders = analysis.readFromVariation(
+        folder = PARTICLE_VARIATION_FOLDER,
+        dataset_names=[f"dist_fn/x_px/{species.value}"],
+        processElement=lambda x: np.mean(x, axis=1),
         recursive=True
     )
-    _, (grid,), _ = analysis.readFromRun(
-        folder = RESULTS_FOLDER / "particle_variation/particles_0032/rep_0",
-        dataset_names=[f"Grid/x_px/{species.value}/Px"],
-        time_interval=0
-    )
-    p8192_time, (p8192_dist,), _ = analysis.readFromRun(
-        folder = RESULTS_FOLDER / "proton-alpha-instability-1D",
-        dataset_names=[f"/dist_fn/x_px/{species.value}"],
-        processElement=lambda x: np.mean(x, axis=0),
-        time_interval=slice(0,time.size)
-    )
-    _, (p8192_grid,), _ = analysis.readFromRun(
-        folder = RESULTS_FOLDER / "proton-alpha-instability-1D",
-        dataset_names=[f"Grid/x_px/{species.value}/Px"],
-        time_interval=0
-    )
+    with h5py.File(PARTICLE_VARIATION_FOLDER / "particles_0032/rep_0.h5") as f:
+        x_grid = f[f"Grid/x_px/{species.value}/X"][:]
+        px_grid = f[f"Grid/x_px/{species.value}/Px"][:]
+
+    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
+        p8192_time = f["Header/time"][:time.size]
+        p8192_dist = np.mean(f[f"/dist_fn/x_px/{species.value}"][:time.size], axis=1)
+        p8192_x_grid = f[f"Grid/x_px/{species.value}/X"][:]
+        p8192_px_grid = f[f"Grid/x_px/{species.value}/Px"][:]
+
     time *= info.omega_pp
     p8192_time *= info.omega_pp
     # extract particle numbers
-    particle_numbers = np.array([int(pfs[0][0].parent.stem[-4:]) for pfs in folders])
+    particle_numbers = np.array([int(pfs[0].stem[-4:]) for pfs in folders])
 
-    temperature = analysis.avgTemperatureFromMomentumDist(grid, dist, info, species)
+    temperature = analysis.temperature1D(
+        x_grid, px_grid, dist, info[species]
+    )
     T_init = np.mean(temperature[:,:,:10], axis=-1)
     T_final = np.mean(temperature[:,:,-10:], axis=-1)
     T_diff = T_final - T_init
     mean_T_diff = np.mean(T_diff, axis=-1)
     std_T_diff = np.std(T_diff, axis=-1)
 
-    p8192_temperature = analysis.avgTemperatureFromMomentumDist(p8192_grid, p8192_dist, info, species)
+    p8192_temperature = analysis.temperature1D(
+        p8192_x_grid, p8192_px_grid, p8192_dist, info[species]
+    )
     p8192_T_diff = np.mean(p8192_temperature[-10:]) - np.mean(p8192_temperature[:10])
 
     plt.style.use(MPLSTYLE_FILE)
@@ -439,15 +366,9 @@ def particleVariationTemperatureXDiff(
     plt.xscale("log", base=2)
     plt.xlabel("Simulated particles $N_\\text{sim}\\,/\\,N_c$")
     plt.ylabel("Temperature $\\Delta T_x$ (eV)")
-    plt.legend()
+    plt.legend(loc="center right")
     if save:
-        save_folder = FIGURES_FOLDER / "particle_variation"
-        save_folder.mkdir(exist_ok=True)
-        plt.savefig(
-            save_folder / f"temperature_diff-vs-num_particles_{species.value}.{FIGURE_FORMAT}",
-            dpi=FIGURE_DPI, bbox_inches="tight"
-        )
-        plt.clf()
+        _saveFigure(f"temperature_diff-vs-num_particles_{species.value}", "particles_per_cell")
     else:
         plt.title(species)
 
@@ -458,36 +379,31 @@ def particleVariationTemperatureXVsTime(
     save: bool=False
 ):
     expected_diffs = [102 - 100, 14.5 - 3, 50 - 12]
-    variation_folder = RESULTS_FOLDER / "particle_variation"
-    time, (dist,), folders = analysis.readFromRun(
-        folder = RESULTS_FOLDER / "particle_variation",
+    time, (dist,), folders = analysis.readFromVariation(
+        folder = PARTICLE_VARIATION_FOLDER,
         dataset_names=[f"/dist_fn/x_px/{species.value}"],
-        processElement=lambda x: np.mean(x, axis=0),
+        processElement=lambda x: np.mean(x, axis=1),
         recursive=True
     )
-    _, (grid,), _ = analysis.readFromRun(
-        folder = RESULTS_FOLDER / "particle_variation/particles_0032/rep_0",
-        dataset_names=[f"Grid/x_px/{species.value}/Px"],
-        time_interval=0
-    )
-    p8192_time, (p8192_dist,), _ = analysis.readFromRun(
-        folder = RESULTS_FOLDER / "proton-alpha-instability-1D",
-        dataset_names=[f"/dist_fn/x_px/{species.value}"],
-        processElement=lambda x: np.mean(x, axis=0),
-        time_interval=slice(0, time.size)
-    )
-    _, (p8192_grid,), _ = analysis.readFromRun(
-        folder = RESULTS_FOLDER / "proton-alpha-instability-1D",
-        dataset_names=[f"Grid/x_px/{species.value}/Px"],
-        time_interval=0
-    )
+    with h5py.File(PARTICLE_VARIATION_FOLDER / "particles_0032/rep_0.h5") as f:
+        x_grid = f[f"Grid/x_px/{species.value}/X"][:]
+        px_grid = f[f"Grid/x_px/{species.value}/Px"][:]
+
+    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
+        p8192_time = f["Header/time"][:time.size]
+        p8192_dist = np.mean(f[f"/dist_fn/x_px/{species.value}"][:time.size], axis=1)
+        p8192_x_grid = f[f"Grid/x_px/{species.value}/X"][:]
+        p8192_px_grid = f[f"Grid/x_px/{species.value}/Px"][:]
+
     time *= info.omega_pp
     p8192_time *= info.omega_pp
     # extract particle numbers
-    particle_numbers = np.array([int(pfs[0][0].parent.stem[-4:]) for pfs in folders])
+    particle_numbers = np.array([int(pfs[0].stem[-4:]) for pfs in folders])
 
-    temperature = analysis.avgTemperatureFromMomentumDist(grid, dist, info, species)
-    p8192_temperature = analysis.avgTemperatureFromMomentumDist(p8192_grid, p8192_dist, info, species)
+    temperature = analysis.temperature1D(x_grid, px_grid, dist, info[species])
+    p8192_temperature = analysis.temperature1D(
+        p8192_x_grid, p8192_px_grid, p8192_dist, info[species]
+    )
 
     plt.style.use(MPLSTYLE_FILE)
     plt.figure()
@@ -499,13 +415,7 @@ def particleVariationTemperatureXVsTime(
     plt.legend(title="Simulated particles $N_\\text{sim}\\,/\\,N_c$ (1)", ncols=2)
 
     if save:
-        save_folder = FIGURES_FOLDER / "particle_variation"
-        save_folder.mkdir(exist_ok=True)
-        plt.savefig(
-            save_folder / f"temperature_x-vs-time-vs-num_particles_{species.value}.{FIGURE_FORMAT}",
-            dpi=FIGURE_DPI, bbox_inches="tight"
-        )
-        plt.clf()
+        _saveFigure(f"temperature_x-vs-time-vs-num_particles_{species.value}", "particles_per_cell")
     else:
         plt.title(species)
 
@@ -513,34 +423,26 @@ def particleVariationWavenumber(
     info: RunInfo,
     save: bool=False
 ):
-    time, (E_fields,), folders = analysis.readFromRun(
-        folder=RESULTS_FOLDER / "particle_variation",
+    time, (E_fields,), folders = analysis.readFromVariation(
+        folder=PARTICLE_VARIATION_FOLDER,
         dataset_names=["/Electric Field/ex"],
         recursive=True
     )
-    _, (grid,), _ = analysis.readFromRun(
-        folder=RESULTS_FOLDER / "particle_variation/particles_0032/rep_0",
-        dataset_names=["/Grid/grid"],
-        time_interval=0,
-    )
-    p8192_time, (p8192_E_field,), _ = analysis.readFromRun(
-        folder=RESULTS_FOLDER / "proton-alpha-instability-1D",
-        dataset_names=["/Electric Field/ex"],
-        time_interval=slice(0,time.size)
-    )
-    _, (p8192_grid,), _ = analysis.readFromRun(
-        folder=RESULTS_FOLDER / "proton-alpha-instability-1D",
-        dataset_names=["/Grid/grid"],
-        time_interval=0,
-    )
+    with h5py.File(PARTICLE_VARIATION_FOLDER / "particles_0032/rep_0.h5") as f:
+        grid = np.squeeze(f["/Grid/grid"])
+
+    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
+        p8192_time = f["Header/time"][:time.size]
+        p8192_E_field = f["Electric Field/ex"][:time.size]
+        p8192_grid = np.squeeze(f["Grid/grid"])
+
     # fix units of time and energy
     time *= info.omega_pp
     grid /= info.lambda_D
     p8192_time *= info.omega_pp
     p8192_grid /= info.lambda_D
     # extract particle numbers
-    particle_numbers = np.array([int(pfs[0][0].parent.stem[-4:]) for pfs in folders])
-
+    particle_numbers = np.array([int(pfs[0].stem[-4:]) for pfs in folders])
     k, k_err = analysis.estimateFrequency(-1, grid, E_fields[...,:350,:], peak_cutoff=0.9)
     p8192_k, p8192_k_err = analysis.estimateFrequency(-1, p8192_grid, p8192_E_field[...,:350,:], peak_cutoff=0.9)
 
@@ -560,40 +462,33 @@ def particleVariationWavenumber(
     )
     plt.xscale("log", base=2)
     plt.xlim(0.5 * particle_numbers[0], 2 ** 14)
-    plt.ylim(0.4, 1.0)
+    plt.ylim(0.3, 0.8)
     plt.axhline(1.0 * info.lambda_D / info.lambda_D_electron, color="black", ls=":", label="Graham")
-    plt.yticks(np.linspace(0.4, 1.0, num=4))
+    plt.yticks(np.linspace(0.3, 0.8, num=6))
     plt.xlabel("Simulated particles $N_\\text{sim}\\,/\\,N_c$ (1)")
     plt.ylabel("Wave numbers $k\\,\\lambda_{D}$ (1)")
-    plt.legend(loc="lower right")
+    plt.legend(loc="upper left")
     if save:
-        save_folder = FIGURES_FOLDER / "particle_variation"
-        save_folder.mkdir(exist_ok=True)
-        plt.savefig(
-            save_folder / f"wavenumber-vs-num_particles.{FIGURE_FORMAT}",
-            dpi=FIGURE_DPI, bbox_inches="tight"
-        )
-        plt.clf()
+        _saveFigure("wavenumber-vs-num_particles", "particles_per_cell")
 
 def particleVariationFrequency(
     info: RunInfo,
     save: bool=False
 ):
-    time, (E_fields,), folders = analysis.readFromRun(
-        folder=RESULTS_FOLDER / "particle_variation",
+    time, (E_fields,), folders = analysis.readFromVariation(
+        folder=PARTICLE_VARIATION_FOLDER,
         dataset_names=["/Electric Field/ex"],
         recursive=True
     )
-    p8192_time, (p8192_E_field,), _ = analysis.readFromRun(
-        folder=RESULTS_FOLDER / "proton-alpha-instability-1D",
-        dataset_names=["/Electric Field/ex"],
-    )
+    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
+        p8192_time = f["Header/time"][:]
+        p8192_E_field = f["Electric Field/ex"][:]
+
     # fix units of time and energy
     time *= info.omega_pp
     p8192_time *= info.omega_pp
-    dt = (time[1] - time[0])
     # extract particle numbers
-    particle_numbers = np.array([int(pfs[0][0].parent.stem[-4:]) for pfs in folders])
+    particle_numbers = np.array([int(pfs[0].stem[-4:]) for pfs in folders])
 
     omega, omega_err = analysis.estimateFrequency(-2, time, E_fields[...,:400,:])
     p8192_omega, p8192_omega_err = analysis.estimateFrequency(-2, p8192_time, p8192_E_field[...,:400,:])
@@ -620,12 +515,6 @@ def particleVariationFrequency(
     plt.axhline(0.72, color="black", ls=":", label="Graham")
     plt.xlabel("Simulated particles $N_\\text{sim}\\,/\\,N_c$ (1)")
     plt.ylabel("Freqency $\\omega\\,/\\,\\omega_{pp}$ (1)")
-    plt.legend(loc="lower right")
+    plt.legend(loc="upper left")
     if save:
-        save_folder = FIGURES_FOLDER / "particle_variation"
-        save_folder.mkdir(exist_ok=True)
-        plt.savefig(
-            save_folder / f"frequency-vs-num_particles.{FIGURE_FORMAT}",
-            dpi=FIGURE_DPI, bbox_inches="tight"
-        )
-        plt.clf()
+        _saveFigure("frequency-vs-num_particles", "particles_per_cell")
