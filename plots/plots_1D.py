@@ -24,11 +24,11 @@ def _saveFigure(fig_name: str, sub_folder: str|None = None):
     generalSaveFigure(fig_name, sub_folder)
 
 def electricFieldOverSpaceAndTime(
-    data_file: Path,
+    filename: Path,
     info: RunInfo,
     save: bool=False
 ):
-    with h5py.File(data_file) as f:
+    with h5py.File(filename) as f:
         time = f["Header/time"][:] * info.omega_pp
         grid_edges = f["Grid/grid"][:]
         ex = f["Electric Field/ex"][:]
@@ -50,11 +50,11 @@ def electricFieldOverSpaceAndTime(
         _saveFigure("e_field-vs-time-vs-space")
 
 def averageTemperature3DOverTime(
-    data_file: Path,
+    filename: Path,
     info: RunInfo,
     save: bool=False
 ):
-    with h5py.File(data_file) as f:
+    with h5py.File(filename) as f:
         time = f["Header/time"][:] * info.omega_pp
         T_electron, T_proton, T_alpha = [
             physics.kelvinToElectronVolt(
@@ -74,7 +74,7 @@ def averageTemperature3DOverTime(
         _saveFigure("avg_temp3d-vs-time")
 
 def velocityDistributionOverTime(
-    data_file: Path,
+    filename: Path,
     info: RunInfo,
     species: Species,
     save: bool=False
@@ -89,21 +89,21 @@ def velocityDistributionOverTime(
         Species.PROTON  : "p",
         Species.ALPHA   : "\\alpha",
     }
-    with h5py.File(data_file) as f:
+    with h5py.File(filename) as f:
         time = f["Header/time"][:] * info.omega_pp
-        dist = np.mean(f[f"/dist_fn/x_px/{species.value}"][:], axis=1)
+        x_grid = f[f"Grid/x_px/{species.value}/X"][:]
         px_grid = f[f"Grid/x_px/{species.value}/Px"][:]
+        dist = np.mean(f[f"/dist_fn/x_px/{species.value}"][:], axis=1)
 
     plt.style.use(MPLSTYLE_FILE)
-    species_info = info[species]
-    normalized_grid = px_grid / species_info.p_thermal
-    dx = 0.5 * info.lambda_D
-    dv = (px_grid[1] - px_grid[0]) / (species_info.si_mass)
-    dist = dist.T / (dx * dv)
-    dist[dist<=0] = np.min(dist[dist>0])
+    v, f_v = analysis.normalizeDistributionXPx1D(
+        x_grid, px_grid, dist, info[species]
+    )
+    relative_v = v / info[species].v_thermal
+    f_v[f_v<=0] = np.min(f_v[f_v>0])
 
     fig = plt.figure(figsize=(8,4))
-    quad = plt.pcolormesh(time, normalized_grid, dist, norm="log", rasterized=True)
+    quad = plt.pcolormesh(time, relative_v, f_v.T, norm="log", rasterized=True)
     plt.colorbar(label=f"$f_{LABEL[species]}$ (s/m$^2$)")
     plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
     plt.ylabel(f"Velocity $v_{LABEL[species]}\\,/\\,v_{{\\text{{thermal}},{LABEL[species]}}}$")
@@ -113,12 +113,12 @@ def velocityDistributionOverTime(
         _saveFigure(f"velocity_dist-vs-time_{species.value}")
 
 def energyEFieldOverTime(
-    data_file: Path,
+    filename: Path,
     info: RunInfo,
     show_fit_details: bool=True,
     save: bool=False
 ):
-    with h5py.File(data_file) as f:
+    with h5py.File(filename) as f:
         time = f["Header/time"][:] * info.omega_pp
         energy = np.mean(f["Electric Field/ex"][:] ** 2, axis=1) * (constants.epsilon_0 / 2) / (constants.electron_volt)
 

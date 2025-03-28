@@ -1,4 +1,5 @@
 from pathlib import Path
+from . import Variation
 
 RESULTS_FOLDER = Path("/home/nilsm/simulation_data")
 
@@ -13,3 +14,7 @@ ANALYSIS_FOLDER = Path(__file__).parent.parent
 
 FIGURES_FOLDER = ANALYSIS_FOLDER / "figures"
 MPLSTYLE_FILE = ANALYSIS_FOLDER / "plots/plot_style.mplstyle"
+
+VARIATION_FILES = {
+    Variation.U_ALPHA_FLOW: sorted(V_FLOW_VARIATION_FOLDER.glob("*.h5")),
+}
