@@ -2,8 +2,10 @@
 """Utility to combine many HDF5-files.
 """
 import argparse
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from os import process_cpu_count
+from functools import partial
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -13,7 +15,37 @@ import numpy as np
 from tqdm import tqdm
 
 INFO_GROUPS = ["/Run_info", "/Header"]
-CONSTANT_GROUPS = ["/Grid"]
+CONSTANT_GROUPS = ["/Grid/CPUs", "/Grid/grid"]
+
+# TODO: This script should be able to operate on a number of files as well (instead of folders)
+# TODO: We cannot handle changing attributes in general currently (not even on datasets). In that case, we could just create a group with multiple datasets in it.
+# It is slightly complicated however to infer which datasets are changing before doing the merge. (We don't have unlimited memory)
+# TODO: Would be nice to be able to specify a desried max. File size and than split up the result in smaller files.
+# TODO: There is no way to include/exclude subgroups of other groups
+# TODO: There is no way to handle extra data on some files (currently crashes).
+
+def isIncluded(
+    path: str,
+    included_paths: Iterable[str],
+    excluded_paths: Iterable[str]
+) -> bool:
+    path = path.removeprefix("/")
+    included_paths = {p.removeprefix("/") for p in included_paths}
+    excluded_paths = {p.removeprefix("/") for p in excluded_paths}
+    assert included_paths.isdisjoint(excluded_paths), "Cannot include and exclude at the same time"
+
+    is_excluded = any(path.startswith(excl) for excl in excluded_paths)
+    is_included_directly = any(path.startswith(incl) for incl in included_paths)
+
+    if len(included_paths) == 0:
+        return not is_excluded
+    if not is_included_directly:
+        return False
+    if not is_excluded:
+        return True
+    nested_excludes = {excl for excl in excluded_paths if not any(incl.startswith(excl) for incl in included_paths)}
+    is_excluded = any(path.startswith(excl) for excl in nested_excludes)
+    return not is_excluded
 
 """ ---------------------------------------------------------------------------
 Initialization
@@ -68,6 +100,7 @@ def copyGridDatasets(src_file: h5py.File, target_file: h5py.File):
         src_file.copy(
             source=group_name,
             dest=target_file,
+            name=group_name,
             shallow=False
         )
 
@@ -92,7 +125,8 @@ def copyDatasets(file_idx: int, src_file: h5py.File, target_file: h5py.File):
         src_ds = h5_obj
         target_ds = target_file[name]
         assert src_ds.shape == target_ds.shape[1:], f"Dimensions ({src_ds.shape} vs. {target_ds.shape[1:]} of '{name}' in '{src_file.filename}' do not match."
-        assert src_ds.attrs == target_ds.attrs, f"Attributes of '{name}' in '{src_file.filename}' do not match."
+        # TODO: Temporary work-around because we donÄt know what to do with changin attributes on datasets
+        # assert src_ds.attrs == target_ds.attrs, f"Attributes of '{name}' in '{src_file.filename}' do not match."
         # write data into target-file
         target_ds[file_idx] = src_ds
 
@@ -151,16 +185,19 @@ def writeAttributeStore(attr_store: dict[str, Any], target_file: h5py.File) -> N
 Main functions
 --------------------------------------------------------------------------- """
 
-def combineHDF5FilesInDirectory(src_directory: Path, target_file: Path) -> None:
-    assert src_directory.is_dir(), f"Source '{src_directory}' not a directory"
-    assert src_directory.exists(), f"Source '{src_directory}' does not exist."
+def combineHDF5FilesInDirectory(
+    src_files: list[Path],
+    target_file: Path,
+    reference_file: Path
+) -> None:
+    assert len(src_files) > 0, "No src-iles provided."
+    assert all(file.exists() for file in src_files), "All src-files have to exist."
+    assert reference_file in src_files, f"Reference file '{reference_file}' has to be part of src_files."
     assert not target_file.exists(), f"Target file '{target_file}' will not be overwritten."
 
     # initial setup
-    src_files = sorted(src_directory.glob("*.h5"))
-    assert len(src_files) > 0, "Found no src-files."
     num_files = len(src_files)
-    with h5py.File(src_files[0]) as h5_src:
+    with h5py.File(reference_file) as h5_src:
         with h5py.File(target_file, mode="x") as h5_target:
             attribute_store = createAttributeStore(h5_src, num_files)
             copyGridDatasets(h5_src, h5_target)
@@ -180,20 +217,34 @@ def combineHDF5FilesInDirectory(src_directory: Path, target_file: Path) -> None:
 Command-line stuff
 --------------------------------------------------------------------------- """
 
-def _validateSrcPathArgument(arg: str) -> Path:
-    """Validates the argument of the given path.
+def _validateSrcPath(arg: str) -> Path:
+    """Validates that the argument is an existing folder.
 
     Args:
-        arg (str): filepath
+        arg (str): folder-path
 
     Returns:
-        Path: valid file path
+        Path: valid folder-path
     """
     src_path = Path(arg)
     if not src_path.exists():
         raise argparse.ArgumentTypeError(f"Directory '{src_path}' does not exist")
-    if not src_path.is_dir():
-        raise argparse.ArgumentTypeError(f"'{src_path}' is not a directory")
+    return src_path.absolute()
+
+def _validateSrcFile(arg: str) -> Path:
+    """Validates that the argument is an existing folder.
+
+    Args:
+        arg (str): folder-path
+
+    Returns:
+        Path: valid folder-path
+    """
+    src_path = Path(arg)
+    if not src_path.exists():
+        raise argparse.ArgumentTypeError(f"Directory '{src_path}' does not exist")
+    if not src_path.is_file():
+        raise argparse.ArgumentTypeError(f"'{src_path}' is not a file.")
     return src_path.absolute()
 
 def _validateNumProcs(arg: str) -> int:
@@ -222,11 +273,22 @@ def _parseComandlineArgs() -> argparse.Namespace:
         help="Number of processors to use. Defauts to the number of CPU-threads.",
         type=_validateNumProcs, default=process_cpu_count(), metavar="N_PROCS>=1"
     )
+    parser.add_argument(
+        "--reference-file",
+        help="File is used as a references for the HDF5-file structure.",
+        type=_validateSrcFile
+    )
+    # TODO: Target file option is broken currently. We need to have target-file when only files are supplied.
+    parser.add_argument(
+        "--target-file",
+        help="Target/Output file.",
+        # type=_validateSrcFile
+    )
     parser.add_argument_group()
     group = parser.add_mutually_exclusive_group()
     group.title = "Target-file options"
     group.add_argument(
-        "--overwrite",
+        "--overwrite-target",
         help="Overwrite existing target-files.",
         action="store_true"
     )
@@ -236,41 +298,75 @@ def _parseComandlineArgs() -> argparse.Namespace:
         action="store_true"
     )
     parser.add_argument(
-        "FOLDER",
-        help="Location of the simulation-data (HDF5)",
-        type=_validateSrcPathArgument, nargs="+"
+        "PATH",
+        help="Input files (HDF5) or folders. Cannot be mixed.",
+        type=_validateSrcPath, nargs="+"
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    only_files = all(p.is_file() for p in args.PATH)
+    only_dirs = all(p.is_dir() for p in args.PATH)
+    if not (only_files or only_dirs):
+        parser.error("You can only specify files OR folders.")
+    if only_files and args.recursive:
+        parser.error("'--recursive' cannot be used with files")
+    if only_dirs and args.target_file is not None:
+        parser.error("'--target-file' cannot be used with folders")
+    if only_dirs and args.reference_file is not None:
+        parser.error("'--reference-file' cannot be used with folders")
 
-def _prepareFiles(args: argparse.Namespace) -> tuple[list[Path], list[Path]]:
-    # look for files
+    return args
+
+def _prepareFiles(args: argparse.Namespace) -> tuple[list[list[Path]],list[Path],list[Path]]:
+    # Handle single files
+    if all(p.is_file() for p in args.PATH):
+        src_files: list[Path] = sorted(args.PATH)
+        if args.target_file is None:
+            target_file: Path = src_files[-1]
+            src_files = src_files[:-1]
+        else:
+            target_file: Path = args.target_file
+        assert not target_file.exists(), f"Target file '{target_file.as_posix()}' exists."
+
+        if args.reference_file is None:
+            reference_file = src_files[0]
+        else:
+            reference_file: Path = args.reference_file
+        return [src_files], [target_file], [reference_file]
+    # Handle directories
     if args.recursive:
         src_dirs: list[Path] = sorted(
-            sub_folder for folder in args.FOLDER for sub_folder in folder.glob("**")
+            sub_folder for folder in args.PATH for sub_folder in folder.glob("**")
         )
     else:
-        src_dirs: list[Path] = args.FOLDER
-    src_dirs = list(set(filter(lambda x: len(list(x.glob("*.h5"))) > 1, src_dirs)))
-    target_files = [folder / f"{folder.name}.h5" for folder in src_dirs]
+        src_dirs: list[Path] = args.PATH
+    src_files: list[list[Path]] = [
+        sorted(folder.glob("*.h5")) for folder in set(src_dirs) if len(list(folder.glob("*.h5"))) > 1
+    ]
+    target_files = [
+        file_batch[0].parent / f"{file_batch[0].parent.name}.h5"
+        for file_batch in src_files
+    ]
     # check conformity with arguments
     if any(file.exists() for file in target_files):
         existing_target_files = [file for file in target_files if file.exists()]
         if args.skip_existing:
             # Filter src_dirs and target_files for existing files
-            src_dirs = [folder for folder, t in zip(src_dirs, target_files) if not t.exists()]
+            src_files = [files for files, t in zip(src_files, target_files) if not t.exists()]
             target_files = [t for t in target_files if not t.exists()]
-        elif args.overwrite:
+        elif args.overwrite_target:
             # Remove exiting files
             for t in existing_target_files: t.unlink()
         else:
             raise FileExistsError(
-                f"Overwrite (--overwrite) or skip (--skip-existing) files:\n"
+                f"Overwrite (--overwrite-target) or skip (--skip-existing) files:\n"
                 f"{'\n'.join([str(f) for f in existing_target_files])}")
-    return src_dirs, target_files
+    return src_files, target_files, [files[0] for files in src_files]
 
 if __name__ == "__main__":
     args = _parseComandlineArgs()
-    src_folders, target_files = _prepareFiles(args)
+    src_folders, target_files, reference_files = _prepareFiles(args)
+    assert len(src_folders) == len(target_files)
+    assert len(src_folders) == len(reference_files)
 
     if len(src_folders) > 1:
         tqdm.set_lock(RLock())
@@ -279,9 +375,14 @@ if __name__ == "__main__":
             initializer=tqdm.set_lock,
             initargs=(tqdm.get_lock(),)
         ) as pool:
-            futures = pool.map(combineHDF5FilesInDirectory, src_folders, target_files)
+            futures = pool.map(
+                combineHDF5FilesInDirectory,
+                src_folders,
+                target_files,
+                reference_files,
+            )
             list(tqdm(futures, desc="Directory", total=len(src_folders)))
     elif len(src_folders) == 1:
-        combineHDF5FilesInDirectory(src_folders[0], target_files[0])
+        combineHDF5FilesInDirectory(src_folders[0], target_files[0], reference_files[0])
     else:
         print("INFO: No directories with files to convert.")
