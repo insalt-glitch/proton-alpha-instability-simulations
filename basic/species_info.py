@@ -54,3 +54,7 @@ class SpeciesInfo:
         """Temperature (K)
         """
         return physics.electronVoltToKelvin(self.temperature)
+
+    @property
+    def si_charge(self: SpeciesInfo):
+        return self.charge * constants.elementary_charge

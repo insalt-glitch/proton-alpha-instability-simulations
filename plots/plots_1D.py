@@ -5,6 +5,7 @@ from scipy import constants, signal
 import h5py
 
 import analysis
+import theory
 from basic import physics
 from .general import generalSaveFigure, plotEnergyEFieldOverTime
 
@@ -213,16 +214,16 @@ def particleVariationGrowthRate(
         8192, p8192_growth_rate, ls="",
         marker="p", markersize=8, markeredgecolor="black", markeredgewidth=1
     )
-    plt.axhline(0.1, label="Graham", color="black", ls=":")
+    plt.axhline(theory.growthRate(1e-1), label="Graham", color="black", ls=":")
+    y_min, y_max = plt.gca().get_ylim()
     plt.fill_between(
         [0, particle_numbers[np.isnan(growth_rates_mean)].max()],
-        [0.0, 0.0],
-        [2.0,2.0],
+        y1=y_min, y2=y_max,
         color="red", alpha=0.6, label="Failed")
     plt.xscale("log", base=2)
     plt.xlim(0.5 * particle_numbers[0], 2 ** 14)
-    plt.ylim(0.0, 1.1e-1)
-    plt.yticks(np.linspace(0.0, 1e-1, 6))
+    plt.ylim(y_min, y_max)
+    plt.yticks(np.linspace(0.2e-1, 1.2e-1, 6))
     plt.xlabel("Simulated particles per cell")
     plt.ylabel("Growth rate $\\gamma\\,/\\,\\omega_{pp}$ (1)")
     plt.legend(loc="lower right")
@@ -454,17 +455,17 @@ def particleVariationWavenumber(
         markersize=10, markeredgecolor="black", markeredgewidth=1)
     plt.errorbar(8192, p8192_k, yerr=p8192_k_err, ls="",
         marker="p", markersize=8, markeredgecolor="black", markeredgewidth=1)
+    plt.axhline(theory.waveNumber(1e-1, info), color="black", ls=":", label="Graham")
+    y_min, y_max = plt.gca().get_ylim()
     plt.fill_between(
         [0, particle_numbers[1]],
-        [0.0, 0.0],
-        [2.0, 2.0],
+        y1=y_min, y2=y_max,
         color="red", alpha=0.6, label="Failed"
     )
     plt.xscale("log", base=2)
     plt.xlim(0.5 * particle_numbers[0], 2 ** 14)
-    plt.ylim(0.3, 0.8)
-    plt.axhline(1.0 * info.lambda_D / info.lambda_D_electron, color="black", ls=":", label="Graham")
-    plt.yticks(np.linspace(0.3, 0.8, num=6))
+    plt.ylim(y_min, y_max)
+    plt.yticks(np.linspace(0.2, 0.7, num=6))
     plt.xlabel("Simulated particles $N_\\text{sim}\\,/\\,N_c$ (1)")
     plt.ylabel("Wave numbers $k\\,\\lambda_{D}$ (1)")
     plt.legend(loc="upper left")
@@ -502,17 +503,18 @@ def particleVariationFrequency(
     plt.errorbar(2 ** 13, p8192_omega, yerr=p8192_omega_err,
         ls="", marker="p",
         markersize=10, markeredgecolor="black", markeredgewidth=1)
+
+    plt.axhline(theory.waveFrequency(1e-1), color="black", ls=":", label="Graham")
+    y_min, y_max = plt.gca().get_ylim()
     plt.fill_between(
         [0, particle_numbers[1]],
-        [0.0, 0.0],
-        [3.0, 3.0],
+        y1=0.5, y2=y_max,
         color="red", alpha=0.6, label="Failed"
     )
     plt.xscale("log", base=2)
     plt.xlim(0.5 * particle_numbers[0], 2 ** 14)
-    plt.ylim(0.4, 1.0)
-    plt.yticks(np.linspace(0.4, 1.0, num=4))
-    plt.axhline(0.72, color="black", ls=":", label="Graham")
+    plt.ylim(0.5, y_max)
+    plt.yticks(np.linspace(0.5, 0.8, num=4))
     plt.xlabel("Simulated particles $N_\\text{sim}\\,/\\,N_c$ (1)")
     plt.ylabel("Freqency $\\omega\\,/\\,\\omega_{pp}$ (1)")
     plt.legend(loc="upper left")

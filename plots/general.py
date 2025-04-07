@@ -33,6 +33,7 @@ def generalSaveFigure(fig_name: str, sub_folder: str|None = None) -> None:
         dpi=FIGURE_DPI, bbox_inches="tight"
     )
     plt.clf()
+    plt.close()
 
 def plotEnergyEFieldOverTime(
     time: NDArray,

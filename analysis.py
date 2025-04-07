@@ -148,15 +148,6 @@ def normalizeDistributionXPx2D(
     f_v = dist_x_px / (dv_x * dx * length_y)
     return v, f_v
 
-def numberDensity1D(
-    x_grid: NDArray,
-    px_grid: NDArray,
-    dist_x_px: NDArray,
-    info: SpeciesInfo,
-) -> float:
-    v, f_v = normalizeDistributionXPx1D(x_grid, px_grid, dist_x_px, info)
-    return _numberDensity1D(v, f_v)
-
 def flowVelocity1D(
     x_grid: NDArray,
     px_grid: NDArray,
@@ -165,15 +156,6 @@ def flowVelocity1D(
 ) -> NDArray:
     v, f_v = normalizeDistributionXPx1D(x_grid, px_grid, dist_x_px, info)
     return _flowVelocity1D(v, f_v)
-
-def pressureTensor1D(
-    x_grid: NDArray,
-    px_grid: NDArray,
-    dist_x_px: NDArray,
-    info: SpeciesInfo,
-) -> float:
-    v, f_v = normalizeDistributionXPx1D(x_grid, px_grid, dist_x_px, info)
-    return _pressureTensor1D(v, f_v, info.mass)
 
 def temperature1D(
     x_grid: NDArray,
@@ -196,26 +178,36 @@ def normalizeDistributionPxPy(
     v_y = py_grid / info.si_mass
     dv_x = v_x[...,1] - v_x[...,0]
     dv_y = v_y[...,1] - v_y[...,0]
-    length_x = abs(x_grid[...,-1] - x_grid[...,0])
-    length_y = abs(y_grid[...,-1] - y_grid[...,0])
+    length_x = np.abs(x_grid[...,-1] - x_grid[...,0])
+    length_y = np.abs(y_grid[...,-1] - y_grid[...,0])
     f_v = dist_px_py / (dv_x * dv_y * length_x * length_y) # s^2/m^4
     return v_x, v_y, f_v
 
 def _numberDensity2D(v_x, v_y, f_v):
-    n0 = np.trapezoid(
-        x=v_x,
-        y=np.trapezoid(x=v_y, y=f_v, axis=-1),
-        axis=-1,
-    )
+    n0 = np.trapezoid(np.trapezoid(f_v, v_y), v_x)
     return n0
 
 def _flowVelocity2D(v_x, v_y, f_v):
-    # TODO: Wrong
     n0 = _numberDensity2D(v_x, v_y, f_v)
-    n0_expand = (...,) + (np.newaxis,) * (f_v.ndim - 2)
-    u_x = np.trapezoid(x=v_x, y=v_x * f_v, axis=-2) / n0[n0_expand]
-    u_y = np.trapezoid(x=v_y, y=v_y * f_v, axis=-1) / n0[n0_expand]
+    u_x = np.trapezoid(v_x * np.trapezoid(f_v, v_y), v_x) / n0
+    u_y = np.trapezoid(np.trapezoid(v_y * f_v, v_y), v_x) / n0
     return u_x, u_y
+
+def _pressureTensor2D(v_x: NDArray, v_y: NDArray, f_v: NDArray, mass: float) -> tuple[NDArray,NDArray]:
+    u_x, u_y = _flowVelocity2D(v_x, v_y, f_v)
+    P_xx = mass * np.trapezoid(
+        (u_x[...,np.newaxis] - v_x) ** 2 * np.trapezoid(f_v, v_y), v_x
+    )
+    P_yy = mass * np.trapezoid(
+        (u_y[...,np.newaxis] - v_y) ** 2 * np.trapezoid(f_v, v_x, axis=-2), v_y
+    )
+    return P_xx, P_yy
+
+def _temperature2D(v_x: NDArray, v_y: NDArray, f_v: NDArray, mass: float) -> NDArray:
+    n0 = _numberDensity2D(v_x, v_y, f_v)
+    P_xx, P_yy = _pressureTensor2D(v_x, v_y, f_v, mass)
+    temperature = (P_xx + P_yy) / (2 * constants.electron_volt * n0)
+    return temperature
 
 def flowVelocity2D(
     x_grid: NDArray,
@@ -228,8 +220,20 @@ def flowVelocity2D(
     v_x, v_y, f_v = normalizeDistributionPxPy(
         x_grid, y_grid, px_grid, py_grid, dist_px_py, info,
     )
-    # TODO: Wrong
     return _flowVelocity2D(v_x, v_y, f_v)
+
+def temperature2D(
+    x_grid: NDArray,
+    y_grid: NDArray,
+    px_grid: NDArray,
+    py_grid: NDArray,
+    dist_px_py: NDArray,
+    info: SpeciesInfo,
+) -> NDArray:
+    v_x, v_y, f_v = normalizeDistributionPxPy(
+        x_grid, y_grid, px_grid, py_grid, dist_px_py, info,
+    )
+    return _temperature2D(v_x, v_y, f_v, info.si_mass)
 
 def waveVector2D(
     x_grid: NDArray,

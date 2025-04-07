@@ -1,11 +1,12 @@
 from pathlib import Path
 from . import Variation
 
-RESULTS_FOLDER = Path("/home/nilsm/simulation_data")
+RESULTS_FOLDER = Path("/media/nilsm/ext_ssd/sim_data")
 
 FOLDER_1D = RESULTS_FOLDER / "epoch_1D"
 PARTICLE_VARIATION_FOLDER = FOLDER_1D / "particle_variation"
 DENSITY_VARIATION_FOLDER = FOLDER_1D / "density_ratio_variation"
+THEORY_DISPERSION_FOLDER = RESULTS_FOLDER / "linear_theory/dispersion_relation"
 
 FOLDER_2D = RESULTS_FOLDER / "epoch_2D"
 V_FLOW_VARIATION_FOLDER = FOLDER_2D / "v_alpha_bulk_variation"

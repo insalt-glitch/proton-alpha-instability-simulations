@@ -26,7 +26,7 @@ def _saveFigure(fig_name: str, sub_folder: Variation|str|None = None):
         if isinstance(sub_folder, Variation):
             sub_folder = sub_folder.value
         folder = f"simulation-2D/{sub_folder}"
-    generalSaveFigure(fig_name, sub_folder)
+    generalSaveFigure(fig_name, folder)
 
 def maxEnergyVsAlphaFlowSpeed(info: RunInfo, normalize_energy: bool=True, save: bool=False):
     files = sorted(V_FLOW_VARIATION_FOLDER.glob("*.h5"))
@@ -369,7 +369,7 @@ def temperature3DOverTimeForAlphaFlowSpeed(info: RunInfo, species: Species, save
         _saveFigure(f"temp_3D_{species.value.lower()}-vs-time", "alpha_flow_velocity_variation")
 
 def temperatureDifferences3DVsAlphaFlowSpeed(
-    info: RunInfo, species: Species, n_points: int=20,
+    info: RunInfo, species: Species, n_points: int=10,
     normalize_temperature: bool=True, save: bool=False
 ):
     files = sorted(V_FLOW_VARIATION_FOLDER.glob("*.h5"))
@@ -507,9 +507,12 @@ def videoEFieldOverTime(
     filename: Path,
     direction: str,
     time_steps: range|None=None,
+    label: str="",
     save: bool=False
 ):
     assert direction.lower() in ["x", "y"], "Direction can only be x or y"
+    if save:
+        assert len(label) > 1, "Label required to save animation"
     with h5py.File(filename) as f:
         time = f["Header/time"][:] * info.omega_pp
         if time_steps is None:
@@ -554,7 +557,7 @@ def videoEFieldOverTime(
         folder = FIGURES_FOLDER / "simulation-2D"
         folder.mkdir(exist_ok=True, parents=True)
         ani.save(
-            filename=folder / "e_field_evolution.mp4",
+            filename=folder / f"e_field_{direction.lower()}_evolution-{label}.gif",
             writer="ffmpeg", fps=30
         )
         plt.close()
@@ -602,6 +605,7 @@ def videoPxPyDistribution(
     filename: Path,
     time_steps: range|None=None,
     normalized_velocity: bool=True,
+    label: str="",
     save: bool=False
 ):
     with h5py.File(filename) as f:
@@ -653,7 +657,7 @@ def videoPxPyDistribution(
     if save:
         FIGURES_FOLDER.mkdir(exist_ok=True)
         ani.save(
-            filename=FIGURES_FOLDER / f"px_py_distribution-{species}.mp4",
+            filename=FIGURES_FOLDER / f"px_py_distribution-{species}-{label}.mp4",
             writer="ffmpeg", fps=30
         )
         plt.close()
