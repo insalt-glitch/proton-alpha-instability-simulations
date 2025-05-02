@@ -14,10 +14,11 @@ from basic import RunInfo, Species, Distribution
 from .settings import (
     FIGURE_DPI,
     FIGURE_FORMAT,
-    FIGURES_FOLDER
+    FIGURES_FOLDER,
+    VIDEO_FORMAT,
 )
 
-def generalSaveFigure(fig_name: str, sub_folder: str|None = None) -> None:
+def generalSaveFigure(fig_name: str, sub_folder: str|None=None) -> None:
     """Saves a figure with 'fig_name' to a given sub-folder. Folder depends on the file-format.
 
     Args:
@@ -35,6 +36,18 @@ def generalSaveFigure(fig_name: str, sub_folder: str|None = None) -> None:
     plt.clf()
     plt.close()
 
+def generalSaveVideo(ani: animation.FuncAnimation, vid_name: str, sub_folder: str|None=None) -> None:
+    folder = FIGURES_FOLDER / f"{VIDEO_FORMAT.lower()}"
+    if sub_folder is not None:
+        folder = folder / sub_folder
+    folder.mkdir(exist_ok=True, parents=True)
+    ani.save(
+        folder / f"{vid_name}.{VIDEO_FORMAT.lower()}",
+        writer="ffmpeg", fps=30
+    )
+    plt.clf()
+    plt.close()
+
 def plotEnergyEFieldOverTime(
     time: NDArray,
     energy: NDArray,
@@ -43,40 +56,41 @@ def plotEnergyEFieldOverTime(
 ):
     fit_result = analysis.fitGrowthRate(time, energy)
 
-    plt.plot(time, energy, alpha=0.7, label="$\\langle W_E\\rangle_\\mathbf{r}^\\text{sim}$")
+    plt.plot(time, energy, label="$\\langle W_E\\rangle_\\mathbf{r}^\\text{sim}$",
+             color="black", lw=2)
     if fit_result is not None:
         lin_fit, fit_interval, poly_info = fit_result
         plt.plot(
             time[slice(*fit_interval)], energy[slice(*fit_interval)],
-            color="blue", lw=2, ls="solid", zorder=3, alpha=0.6,
+            color="orange", lw=3, ls="solid", zorder=3,
             label="Linear regime" if show_legend else None
         )
         plt.plot(
             time, np.exp(lin_fit.slope * time + lin_fit.intercept),
-            ls=":", color="black", zorder=9,
+            ls="--", color="royalblue", zorder=9, lw=1.5,
             label="$W_{E}\\propto\\exp(2\\gamma\\,t)$" if show_legend else None
         )
         if show_fit_details:
             poly, extrema, turn_p = poly_info
             plt.plot(
                 time, np.exp(poly(time)), label="Polynomial fit" if show_legend else None,
-                color="black", lw=1, ls="-.", zorder=2, alpha=0.8,
+                color="gray", lw=1.5, ls=":", zorder=2, alpha=0.8
             )
             plt.plot(
-                extrema, np.exp(poly(extrema)), label="Extrema" if show_legend else None,
-                color="lightblue",zorder=10, ls="", alpha=0.8,
-                marker="o", markeredgecolor="black", markeredgewidth=1, markersize=10,
+                extrema, np.exp(poly(extrema)), label="Turning points" if show_legend else None,
+                color="gray", zorder=3, ls="", alpha=0.8,
+                marker="o", markeredgecolor="black", markeredgewidth=1.5, markersize=10,
             )
             plt.plot(
-                turn_p, np.exp(poly(turn_p)), label="Turning point" if show_legend else None,
-                color="red", zorder=10, ls="", marker="p",
-                markersize=10, markeredgecolor="black", markeredgewidth=1,
+                turn_p, np.exp(poly(turn_p)), label="Inflection point" if show_legend else None,
+                color="white", zorder=3, ls="", marker="p",
+                markersize=10, markeredgecolor="black", markeredgewidth=1.5,
             )
     plt.xlim(0, 150)
     plt.xticks(np.linspace(0.0, 150.0, num=6))
     plt.yscale("log")
-    plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
-    plt.ylabel("Energy $\\langle W_E\\rangle_\\mathbf{r}$ (eV$\\,/\\,$m$^3$)")
+    plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
+    plt.ylabel("Energy $\\langle W_E\\rangle_x$ (eV$\\,/\\,$m$^3$)") # \\mathbf{r}
     if show_legend:
         plt.legend()
 
@@ -96,7 +110,10 @@ def _loadSpaceMomDistribution(
             t_idx = time
         else:
             t_idx = np.argmin(np.abs(sim_time - time))
-        x_grid = f[f"Grid/grid/X"][:]
+        if "Grid/grid/X" in f:
+            x_grid = f["Grid/grid/X"][:]
+        else:
+            x_grid = f["Grid/grid"][:]
         if is_2d_simulation:
             y_grid = f[f"Grid/grid/Y"][:]
         mom_grid = f[f"Grid/{dist}/{species}/{dist.momentum()}"]
@@ -128,6 +145,7 @@ def momentumDistributionComparison(
     labels: list[str]|None=None,
     legend_title: str|None=None,
     legend_ncols: int=1,
+    legend_loc: str="best",
     normalized_velocity: bool=True,
     save: bool=False,
 ):
@@ -171,8 +189,8 @@ def momentumDistributionComparison(
         plt.xlabel(f"Velocity $v_{species.symbol()}\\,/\\,v^{{t=0}}_{species.symbol()}$ (1)")
     else:
         plt.xlabel(f"Velocity $v_{species.symbol()}$ (km/s)")
-    plt.ylabel(f"$\\langle f_{species.symbol()}\\rangle_{{{dist_type.space()}}}$ (s/m$^2$)")
-    plt.legend(title=legend_title, ncols=legend_ncols)
+    plt.ylabel(f"$\\langle f_{species.symbol()}\\rangle_{{{dist_type.space().lower()}}}$ (s/m$^2$)")
+    plt.legend(title=legend_title, ncols=legend_ncols, loc=legend_loc)
     plt.xlim(min_v, max_v)
     if save:
         generalSaveFigure(f"{dist_type.momentum().lower()}_distribution-{species}")
@@ -201,7 +219,7 @@ def spaceMomentumDistributon(
     plt.figure(figsize=(5.9, 3))
     plt.pcolormesh(x_grid, v, f_v.T, norm="log")
     plt.colorbar(label=f"$\\langle f_{species.symbol()}\\rangle_{{{dist_type.space()}}}$ (s/m$^2$)")
-    plt.xlabel(f"Position {dist_type.space().lower()}$\\,/\\,\\lambda_D$ (1)")
+    plt.xlabel(f"Position {dist_type.space().lower()}$\\,/\\,\\lambda_\\text{{D}}$ (1)")
     if normalized_velocity:
         plt.ylabel(f"Velocity $v_{species.symbol()}\\,/\\,v^{{t=0}}_{species.symbol()}$ (1)")
     else:
@@ -261,7 +279,7 @@ def videoMomentumDistribution(
     text = ax.text(0.95, 0.95,
             horizontalalignment='right',
             verticalalignment='top',
-            s=f"t$\\,\\omega_{{pp}}=\\,${time[0]:>5.1f}",
+            s=f"t$\\,\\omega_\\text{{pp}}=\\,${time[0]:>5.1f}",
             transform=ax.transAxes
     )
     plt.yscale("log")
@@ -289,10 +307,10 @@ def videoMomentumDistribution(
 
     ani = animation.FuncAnimation(fig=fig, func=update, frames=range(len(list(time_steps))))
     if save:
-        FIGURES_FOLDER.mkdir(exist_ok=True)
-        ani.save(
-            filename=FIGURES_FOLDER / f"{dist_type.momentum().lower()}_distribution-{species}.mp4",
-            writer="ffmpeg", fps=30
+        generalSaveVideo(
+            ani,
+            f"{dist_type.momentum().lower()}_distribution-{species}",
+            f"{dist_type.momentum().lower()}_distribution"
         )
     else:
         return HTML(ani.to_jshtml())

@@ -18,8 +18,8 @@ class Species(Enum):
         """Get superscript/subscript symbol for LaTeX.
         """
         SYMBOLS = {
-            Species.ELECTRON: "e",
-            Species.PROTON  : "p",
+            Species.ELECTRON: "\\text{e}",
+            Species.PROTON  : "\\text{p}",
             Species.ALPHA   : "\\alpha",
         }
         assert self in SYMBOLS, "What is going on?"

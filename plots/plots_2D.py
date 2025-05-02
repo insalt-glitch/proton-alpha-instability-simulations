@@ -5,7 +5,7 @@ import colormaps as cmaps
 import h5py
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from matplotlib import animation
+from matplotlib.animation import FuncAnimation
 import numpy as np
 from scipy import constants, signal
 from IPython.display import HTML
@@ -17,9 +17,9 @@ from basic.paths import (
     FIGURES_FOLDER,
     V_FLOW_VARIATION_FOLDER
 )
-from .general import generalSaveFigure, plotEnergyEFieldOverTime
+from .general import generalSaveFigure, plotEnergyEFieldOverTime, generalSaveVideo
 
-def _saveFigure(fig_name: str, sub_folder: Variation|str|None = None):
+def _saveFigure(fig_name: str, sub_folder: Variation|str|None=None):
     if sub_folder is None:
         folder = "simulation-2D"
     else:
@@ -27,6 +27,15 @@ def _saveFigure(fig_name: str, sub_folder: Variation|str|None = None):
             sub_folder = sub_folder.value
         folder = f"simulation-2D/{sub_folder}"
     generalSaveFigure(fig_name, folder)
+
+def _saveVideo(ani: FuncAnimation, vid_name: str, sub_folder: Variation|str|None=None):
+    if sub_folder is None:
+        folder = "simulation-2D"
+    else:
+        if isinstance(sub_folder, Variation):
+            sub_folder = sub_folder.value
+        folder = f"simulation-2D/{sub_folder}"
+    generalSaveVideo(ani, vid_name, folder)
 
 def maxEnergyVsAlphaFlowSpeed(info: RunInfo, normalize_energy: bool=True, save: bool=False):
     files = sorted(V_FLOW_VARIATION_FOLDER.glob("*.h5"))
@@ -113,18 +122,21 @@ def waveAngleVsAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=
         arr_theta_E,
         arr_theta_E_err,
     ) = _anglesForAlphaFlowSpeed(info, e_field_component)
-    theory_v = np.linspace(90, 200, num=1000)
-    theory_theta = np.arccos(
-        info.c_s / (theory_v * 1e3),
-        where=theory_v * 1e3 > info.c_s,
-        out=np.zeros_like(theory_v)
-    ) * 180 / np.pi
+    with h5py.File("theory_u_alpha_dispersion.h5") as f:
+        theory_v = f["u_alpha_bulk"][:] / 1e3
+        theory_theta = f["theta_max"][:] * 180 / np.pi
+    # theory_v = np.linspace(90, 200, num=1000)
+    # theory_theta = np.arccos(
+    #     info.c_s / (theory_v * 1e3),
+    #     where=theory_v * 1e3 > info.c_s,
+    #     out=np.zeros_like(theory_v)
+    # ) * 180 / np.pi
     plt.style.use(MPLSTYLE_FILE)
     default_cycler = (cycler(color=cmaps.devon.discrete(3).colors) +
                     cycler(linestyle=['-', '--', ':']))
     plt.rc('axes', prop_cycle=default_cycler)
     plt.fill_between([0.0, info.c_s * 1e-3], y1=-90, y2=90, lw=2, color="lightgray", label="$u_{\\alpha} \\leq c_s$")
-    plt.plot(theory_v, theory_theta, label="$\\cos(\\theta)=c_s\\,/\\,u_{\\alpha}$", ls="solid")
+    plt.plot(theory_v, theory_theta, label="Linear theory $\\theta_\\text{max}$", ls="solid") # $\\cos(\\theta)=c_s\\,/\\,u_{\\alpha}$
 
     plt.errorbar(
         flow_velocity, arr_theta * 180 / np.pi,
@@ -195,7 +207,6 @@ def electricField2DSnapshot(filename: Path, info: RunInfo, time: float|int, save
         x = f["Grid/x_px/Alphas/X"][0] / info.lambda_D
         y = f["Grid/y_px/Alphas/Y"][0] / info.lambda_D
         E_x = f['Electric Field/ex'][time_step]
-        E_y = f['Electric Field/ey'][time_step]
     E_x_max = np.max(np.abs(E_x))
     plt.style.use(MPLSTYLE_FILE)
     plt.figure()
@@ -332,10 +343,24 @@ def psdOmegaForAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=
         E_field = E_x[linear_idx] if e_field_component == "x" else E_y[linear_idx]
         f, p = signal.periodogram(E_field, axis=-3, fs=1/(time[1] - time[0]))
         p_mean = np.mean(p, axis=(1,2))
+        f *= 2 * np.pi
+        def lorentzian( x, x0, gam, a, b):
+            return a * gam**2 / ( gam**2 + ( x - x0 )**2) + b
+        from scipy import optimize
+        popt, pcov = optimize.curve_fit(
+            lambda x, x0, gam, a, b: np.log(lorentzian(x, x0, gam, a, b)),
+            f[f<np.pi][1:], np.log(p_mean[f<np.pi][1:]),
+            p0=[f[1:][np.argmax(p_mean[1:])], 0.05, np.max(p_mean[1:]), 0])
+        print(f"u_alpha = {flow_velocity[file_idx]}")
+        print(popt)
+        print(np.sqrt(np.diag(pcov)))
+        print()
+        fit_f = np.linspace(0, np.pi, num=100)
+        plt.plot(fit_f, lorentzian(fit_f, *popt), color="black", lw=1)
         plt.plot(
             f[1:], p_mean[1:], label=f"$u_\\alpha^{{t=0}}$={int(flow_velocity[file_idx])}"
         )
-    plt.xlabel("Frequency $f\\,/\\,\\omega_{pp}$ (1)")
+    plt.xlabel("Frequency $\\omega\\,/\\,\\omega_{pp}$ (1)")
     plt.ylabel(
         f"$\\langle\\text{{PSD}}[E_{e_field_component}]\\rangle_\\mathbf{{r}}$ $(V^2/m^2)$"
     )
@@ -343,7 +368,7 @@ def psdOmegaForAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=
         title=f"Initial flow velocity (km$\\,/\\,$s)",
         ncols=2, labelspacing=.2, columnspacing=1
     )
-    plt.xlim(f[1], 0.5)
+    plt.xlim(0, np.pi)
     plt.ylim(bottom=2e-4, top=2e-1)
     plt.yscale("log")
     if save:
@@ -388,7 +413,7 @@ def temperatureDifferences3DVsAlphaFlowSpeed(
             np.var(temp[-n_points:]) + np.var(temp[:n_points])
         ) / np.sqrt(n_points)
     if normalize_temperature:
-        K_alpha_t0 = (info.alpha.si_mass * velocity ** 2 / (2 * constants.electron_volt))
+        K_alpha_t0 = (info.alpha.si_mass * (velocity * 1e3) ** 2 / (2 * constants.electron_volt))
         T_diff /= K_alpha_t0
         T_diff_err /= K_alpha_t0
     plt.style.use(MPLSTYLE_FILE)
@@ -407,7 +432,9 @@ def temperatureDifferences3DVsAlphaFlowSpeed(
         plt.ylabel(f"Temperature $\\Delta T_{species.symbol()}$ (eV)")
     plt.legend(loc="lower right")
     if save:
-        _saveFigure(f"temp_3D_{species.value.lower()}-vs-alpha_flow_velocity", "alpha_flow_velocity_variation")
+        _saveFigure(
+            f"temp_3D_{species.value.lower()}-vs-alpha_flow_velocity", "alpha_flow_velocity_variation"
+        )
 
 def psdFlowVelocity(info: RunInfo, species: Species, space_dir: str, mom_dir: str, save: bool=False):
     assert space_dir in ["x", "y"], "Unknown e-field component"
@@ -552,15 +579,13 @@ def videoEFieldOverTime(
         text.set_text(f"t$\\,\\omega_{{pp}}\\,=\\,${time[frame_idx]:>5.1f}")
         return text, quad
 
-    ani = animation.FuncAnimation(fig=fig, func=update, frames=range(len(list(time_steps))))
+    ani = FuncAnimation(fig=fig, func=update, frames=range(len(list(time_steps))))
     if save:
-        folder = FIGURES_FOLDER / "simulation-2D"
-        folder.mkdir(exist_ok=True, parents=True)
-        ani.save(
-            filename=folder / f"e_field_{direction.lower()}_evolution-{label}.gif",
-            writer="ffmpeg", fps=30
+        _saveVideo(
+            ani,
+            f"e_field_{direction.lower()}_evolution-{label}",
+            f"e_field_{direction.lower()}_evolution",
         )
-        plt.close()
     else:
         return HTML(ani.to_jshtml())
 
@@ -652,15 +677,13 @@ def videoPxPyDistribution(
         return (quad, text,)
 
     frames = list(range(len(list(time_steps))))
-    from tqdm import tqdm
-    ani = animation.FuncAnimation(fig=fig, func=update, frames=frames)
+    ani = FuncAnimation(fig=fig, func=update, frames=frames)
     if save:
-        FIGURES_FOLDER.mkdir(exist_ok=True)
-        ani.save(
-            filename=FIGURES_FOLDER / f"px_py_distribution-{species}-{label}.mp4",
-            writer="ffmpeg", fps=30
+        _saveVideo(
+            ani,
+            f"px_py_distribution-{species}-{label}",
+            f"px_py_distribution/{species}"
         )
-        plt.close()
     else:
         return HTML(ani.to_jshtml())
 
@@ -691,4 +714,4 @@ def pxPyDistribution(
         plt.ylabel(f"Velocity $v_{{{species.symbol()},x}}$ (km/s)")
         plt.ylabel(f"Velocity $v_{{{species.symbol()},y}}$ (km/s)")
     if save:
-        generalSaveFigure(f"px_py_distribution-{species}-t={time}")
+        _saveFigure(f"px_py_distribution-{species}-t={time}")

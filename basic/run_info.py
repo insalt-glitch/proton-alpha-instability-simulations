@@ -54,8 +54,7 @@ class RunInfo:
     def c_s(self: SpeciesInfo) -> float:
         """Ion acoustic speed (m/s)
         """
-        si_proton_mass = self.proton.mass * constants.electron_mass
-        return math.sqrt(constants.electron_volt / si_proton_mass * (
+        return math.sqrt(constants.electron_volt / self.proton.si_mass * (
             1 * self.electron.temperature +
             3 * self.proton.temperature
         ))

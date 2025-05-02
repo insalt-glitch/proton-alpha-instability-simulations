@@ -131,7 +131,10 @@ def normalizeDistributionXPx1D(
     v = px_grid / (info.si_mass)
     dx = np.abs(x_grid[...,1] - x_grid[...,0])
     dv_x = np.abs(v[...,1] - v[...,0])
-    f_v = dist_x_px / (dv_x * dx)
+    d_ps = dv_x * dx
+    f_v = dist_x_px / d_ps.reshape(
+        (d_ps.shape + ((1,) * (dist_x_px.ndim - d_ps.ndim)))
+    )
     return v, f_v
 
 def normalizeDistributionXPx2D(
@@ -371,6 +374,7 @@ def _readFromMultipleRuns(
         path for path in folder.iterdir()
         if path.is_dir() and len(list(path.glob("**/*.h5", recurse_symlinks=True))) > 0
     )
+    sub_folders = [f for f in sub_folders if "8192" not in f.as_posix()]
     assert len(sub_folders) > 0, "Found no simulation data"
     time_runs = []
     quantities_runs = []
