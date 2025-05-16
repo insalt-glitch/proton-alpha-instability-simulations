@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.animation import FuncAnimation
 import numpy as np
-from scipy import constants, signal
+from scipy import constants, signal, optimize
 from IPython.display import HTML
 
 import analysis
@@ -15,7 +15,13 @@ from basic import RunInfo, physics, Species, Variation
 from basic.paths import (
     MPLSTYLE_FILE,
     FIGURES_FOLDER,
-    V_FLOW_VARIATION_FOLDER
+    FOLDER_2D,
+    V_FLOW_VARIATION_FOLDER,
+)
+from plots.settings import (
+    MARKERS,
+    FIGURE_FULL_SIZE,
+    FIGURE_HALF_SIZE,
 )
 from .general import generalSaveFigure, plotEnergyEFieldOverTime, generalSaveVideo
 
@@ -71,9 +77,9 @@ def maxEnergyVsAlphaFlowSpeed(info: RunInfo, normalize_energy: bool=True, save: 
         [0.0, info.c_s * 1e-3], y1=y_min, y2=y_max,
         lw=2, color="lightgray", label="$u_{\\alpha} \\leq c_s$"
     )
-    plt.xlabel("Initial flow velocity $u_{\\alpha}^{t=0}$ (km/s)")
+    plt.xlabel("Flow velocity $u_{\\alpha}^{t=0}$ (km$\\,/\\,$s)")
     if normalize_energy:
-        plt.ylabel("$\\max[\\langle W_E\\rangle_\\mathbf{r}]_t/K_\\alpha^{t=0}$  (1)")
+        plt.ylabel("$\\max[\\langle W_E\\rangle_\\mathbf{r}]_t\\,/\\,K_\\alpha^{t=0}$  (1)")
     else:
         plt.ylabel("$\\max[\\langle W_E\\rangle_\\mathbf{r}]_t$  (MeV$\\,/\\,$m$^3$)")
     plt.xlim(90, 190)
@@ -125,16 +131,12 @@ def waveAngleVsAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=
     with h5py.File("theory_u_alpha_dispersion.h5") as f:
         theory_v = f["u_alpha_bulk"][:] / 1e3
         theory_theta = f["theta_max"][:] * 180 / np.pi
-    # theory_v = np.linspace(90, 200, num=1000)
-    # theory_theta = np.arccos(
-    #     info.c_s / (theory_v * 1e3),
-    #     where=theory_v * 1e3 > info.c_s,
-    #     out=np.zeros_like(theory_v)
-    # ) * 180 / np.pi
+
     plt.style.use(MPLSTYLE_FILE)
     default_cycler = (cycler(color=cmaps.devon.discrete(3).colors) +
                     cycler(linestyle=['-', '--', ':']))
     plt.rc('axes', prop_cycle=default_cycler)
+    plt.figure(figsize=FIGURE_FULL_SIZE)
     plt.fill_between([0.0, info.c_s * 1e-3], y1=-90, y2=90, lw=2, color="lightgray", label="$u_{\\alpha} \\leq c_s$")
     plt.plot(theory_v, theory_theta, label="Linear theory $\\theta_\\text{max}$", ls="solid") # $\\cos(\\theta)=c_s\\,/\\,u_{\\alpha}$
 
@@ -150,7 +152,7 @@ def waveAngleVsAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=
         ecolor="orange", ls="", zorder=2, elinewidth=4,
         label="Estimate via $\\langle \\mathbf{E}\\rangle_{t,\\mathbf{r}}$"
     )
-    plt.xlabel("Initial velocity $u_{\\alpha}$ (km$\\,/\\,$s)")
+    plt.xlabel("Flow velocity $u_{\\alpha}$ (km$\\,/\\,$s)")
     plt.ylabel("Wave angle $\\theta$ (deg)")
     plt.xlim(95, 190)
     plt.yticks(np.linspace(0, 75, num=6))
@@ -192,7 +194,7 @@ def simulatedAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=Fa
     legend1 = plt.legend(handles[:2], labels[:2], loc="upper left", framealpha=0.5, edgecolor="black")
     plt.legend(handles[2:], labels[2:], loc="lower right", framealpha=0.5, edgecolor="black", markerscale=0.8)
     plt.gca().add_artist(legend1)
-    plt.xlabel("Initial velocity $u_{\\alpha}$ (km/s)")
+    plt.xlabel("Velocity $u_{\\alpha}$ (km/s)")
     plt.ylabel("Simulated velocity $u_{\\alpha}^\\text{sim}$ (km/s)")
     if save:
         _saveFigure("simulated_flow_velocity-vs-flow_velocity", "alpha_flow_velocity_variation")
@@ -204,19 +206,22 @@ def electricField2DSnapshot(filename: Path, info: RunInfo, time: float|int, save
         else:
             assert abs(time) < f["Header/time"].size, "Time out of range"
             time_step = time
-        x = f["Grid/x_px/Alphas/X"][0] / info.lambda_D
-        y = f["Grid/y_px/Alphas/Y"][0] / info.lambda_D
+        x = f["Grid/grid/X"] / info.lambda_D
+        y = f["Grid/grid/Y"] / info.lambda_D
         E_x = f['Electric Field/ex'][time_step]
     E_x_max = np.max(np.abs(E_x))
     plt.style.use(MPLSTYLE_FILE)
-    plt.figure()
-    plt.pcolormesh(x, y, E_x.T, cmap="bwr", vmin=-E_x_max, vmax=E_x_max)
-    plt.xlabel("Position x$\\,/\\,\\lambda_D$ (1)")
-    plt.ylabel("Position y$\\,/\\,\\lambda_D$ (1)")
+    plt.figure(figsize=FIGURE_FULL_SIZE)
+    plt.pcolormesh(x, y, E_x.T, cmap="bwr", vmin=-0.8, vmax=0.8, rasterized=True)
+    plt.xlabel("Position x$\\,/\\,\\lambda_\\text{D}$ (1)")
+    plt.ylabel("Position y$\\,/\\,\\lambda_\\text{D}$ (1)")
+    plt.xticks(np.linspace(0, 64, num=5))
+    plt.yticks(np.linspace(0, 32, num=5))
     plt.gca().set_aspect('equal')
     divider = make_axes_locatable(plt.gca())
-    cax = divider.append_axes("right", size="5%", pad=0.05)
+    cax: plt.Axes = divider.append_axes("right", size="5%", pad=0.05)
     plt.colorbar(label="Electric field E$_x$ (V/m)", cax=cax)
+    cax.set_yticks(np.linspace(-0.8, 0.8, num=5))
     plt.tight_layout()
     if save:
         _saveFigure(f"electric_field_2d-idx_t={time_step}", "alpha_flow_velocity_variation")
@@ -242,7 +247,7 @@ def strengthBFieldOverTime(filename: Path, info: RunInfo, save: bool=False):
     plt.style.use(MPLSTYLE_FILE)
     plt.figure()
     plt.plot(time, np.mean(np.sqrt(B_x ** 2 + B_y ** 2) * 1e12, axis=(1,2)), lw=1, color="black")
-    plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
+    plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
     plt.ylabel("Magnetic field strength $\\langle\\|\\mathbf{B}\\|\\rangle_\\mathbf{r}$ (pT)")
     plt.xlim(0,150)
     if save:
@@ -253,17 +258,17 @@ def psdBField(filename: Path, info: RunInfo, save: bool=False):
         time = f["Header/time"][1:] * info.omega_pp
         B_x = f['Magnetic Field/bx'][1:]
         B_y = f['Magnetic Field/by'][1:]
-    f, Pxx_bx = signal.periodogram(np.mean(B_x, axis=(1,2)), fs=1 / (time[1] - time[0]), detrend=False)
-    _, Pxx_by = signal.periodogram(np.mean(B_y, axis=(1,2)), fs=1 / (time[1] - time[0]), detrend=False)
+    f, Pxx_bx = signal.periodogram(np.mean(B_x, axis=(1,2)), fs=1 / (time[1] - time[0]), detrend=False, scaling="spectrum")
+    _, Pxx_by = signal.periodogram(np.mean(B_y, axis=(1,2)), fs=1 / (time[1] - time[0]), detrend=False, scaling="spectrum")
 
     plt.style.use(MPLSTYLE_FILE)
-    plt.figure()
-    plt.plot(f, Pxx_bx * 1e24, lw=1, label="PSD$[\\langle B_x\\rangle_\\mathbf{r}]$")
-    plt.plot(f, Pxx_by * 1e24, lw=1, label="PSD$[\\langle B_y\\rangle_\\mathbf{r}]$")
+    plt.figure(figsize=(FIGURE_HALF_SIZE[0], 2.7))
+    plt.plot(f, Pxx_bx * 1e18, lw=1, label="PSD$[\\langle B_x\\rangle_\\mathbf{r}]$")
+    plt.plot(f, Pxx_by * 1e18, lw=1, label="PSD$[\\langle B_y\\rangle_\\mathbf{r}]$")
     plt.xscale("log")
     plt.yscale("log")
-    plt.xlabel("Frequency $f\\,/\\,\\omega_{pp}$ (1)")
-    plt.ylabel("PSD$[\\langle B_i\\rangle_\\mathbf{r}]$ (pT$^2$)")
+    plt.xlabel("Frequency $f\\,/\\,\\omega_\\text{pp}$ (1)")
+    plt.ylabel("PSD$[\\langle B_i\\rangle_\\mathbf{r}]$ (nT$^2$)")
     plt.legend()
     plt.xlim(1 / abs(time[-1]- time[0]), 0.5 / (time[1] - time[0]))
     if save:
@@ -277,9 +282,9 @@ def energyBField(filename: Path, info: RunInfo, save: bool=False):
     energy = 0.5 * np.mean(B_x ** 2 + B_y ** 2, axis=(1,2)) / (constants.mu_0 * constants.electron_volt)
 
     plt.style.use(MPLSTYLE_FILE)
-    plt.figure()
+    plt.figure(figsize=(FIGURE_HALF_SIZE[0], 2.7))
     plt.plot(time[1:], energy[1:], color="black", lw=1)
-    plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
+    plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
     plt.ylabel("Energy density $\\langle W_B\\rangle_\\mathbf{r}$ (eV$\\,/\\,$m$^3$) ")
     plt.xlim(0, 150.0)
     if save:
@@ -294,6 +299,62 @@ def omegaVsAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=Fals
     for file_idx, filename in enumerate(files):
         flow_velocity[file_idx] = int(filename.stem[-3:])
         with h5py.File(filename) as f:
+            E_x = f['Electric Field/ex'][1:]
+            E_y = f['Electric Field/ey'][1:]
+            time = f["Header/time"][1:] * info.omega_pp
+        res = analysis.fitGrowthRate(time, np.mean(E_x ** 2 + E_y ** 2, axis=(1,2)))
+        linear_idx = slice(res[1][-1])
+        E_field = E_x[linear_idx] if e_field_component == "x" else E_y[linear_idx]
+        f, p = signal.periodogram(E_field, axis=-3, fs=1/(time[1] - time[0]))
+        p_mean = np.mean(p, axis=(1,2))
+        f *= 2 * np.pi
+        def lorentzian( x, x0, gam, a, b):
+            return a * gam**2 / ( gam**2 + ( x - x0 )**2) + b
+
+        popt, pcov = optimize.curve_fit(
+            lambda x, x0, gam, a, b: np.log(lorentzian(x, x0, gam, a, b)),
+            f[f<np.pi][1:], np.log(p_mean[f<np.pi][1:]),
+            p0=[f[1:][np.argmax(p_mean[1:])], 0.05, np.max(p_mean[1:]), 0])
+        arr_omega[file_idx] = popt[0]
+        arr_omega_err[file_idx] = np.sqrt(pcov[0,0])
+    with h5py.File("theory_u_alpha_dispersion.h5") as f:
+        theory_v = f["u_alpha_bulk"][:] / 1e3
+        theory_omega = f["omega_max"][:] / info.omega_pp
+    plt.style.use(MPLSTYLE_FILE)
+    default_cycler = (cycler(color=cmaps.devon.discrete(3).colors) +
+                    cycler(linestyle=['-', '--', ':']))
+    plt.rc('axes', prop_cycle=default_cycler)
+    plt.figure(figsize=(FIGURE_HALF_SIZE[0], 2.5))
+    plt.plot(theory_v, theory_omega, ls="solid", label="Linear theory")
+    plt.errorbar(
+        flow_velocity, arr_omega, yerr=arr_omega_err,
+        marker="o", markersize=10, ls="",
+        markeredgecolor="black", markeredgewidth=1,
+        label="Simulation"
+    )
+    plt.ylim(0, 0.9)
+    low, high = plt.gca().get_ylim()
+    plt.fill_between(
+        [0.0, info.c_s * 1e-3], y1=low, y2=high,
+        lw=2, color="lightgray", label="$u_{\\alpha} \\leq c_s$"
+    )
+    plt.xlim(95, 185)
+    plt.ylim(low, high)
+    plt.xlabel(f"Flow velocity $u_\\alpha^{{t=0}}$ (km$\\,/\\,$s)")
+    plt.ylabel(f"Frequency $\\omega_\\text{{max}}\\,/\\,\\omega_\\text{{pp}}$ (1)")
+    plt.legend(loc=(0.05, 0.4), labelspacing=0.4)
+    if save:
+        _saveFigure(f"omega-vs-alpha_flow_velocity", "alpha_flow_velocity_variation")
+
+def wavenumberVsAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=False):
+    assert e_field_component in ["x", "y"], "Unknown e-field component"
+    files = sorted(V_FLOW_VARIATION_FOLDER.glob("*.h5"))
+    arr_k = np.empty(len(files))
+    arr_k_err = np.empty(len(files))
+    flow_velocity = np.empty(len(files))
+    for file_idx, filename in enumerate(files):
+        flow_velocity[file_idx] = int(filename.stem[-3:])
+        with h5py.File(filename) as f:
             x = f["Grid/grid/X"][:] / info.lambda_D
             y = f["Grid/grid/Y"][:] / info.lambda_D
             E_x = f['Electric Field/ex'][1:]
@@ -302,14 +363,23 @@ def omegaVsAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=Fals
         res = analysis.fitGrowthRate(time, np.mean(E_x ** 2 + E_y ** 2, axis=(1,2)))
         linear_idx = slice(res[1][-1])
         E_field = E_x[linear_idx] if e_field_component == "x" else E_y[linear_idx]
-        arr_omega[file_idx], arr_omega_err[file_idx] = analysis.estimateFrequency(
-            -3, time, E_field, n_spatial_dims=2
-        )
+        k, k_err = analysis.waveVector2D(x, y, E_field)
+        arr_k[file_idx] = np.linalg.norm(k)
+        arr_k_err[file_idx] = np.linalg.norm(k * k_err / np.linalg.norm(k))
+    with h5py.File("theory_u_alpha_dispersion.h5") as f:
+        theory_v = f["u_alpha_bulk"][:] / 1e3
+        theory_k = f["k_max"][:] * info.lambda_D
     plt.style.use(MPLSTYLE_FILE)
-    plt.figure()
+    default_cycler = (cycler(color=cmaps.devon.discrete(3).colors) +
+                    cycler(linestyle=['-', '--', ':']))
+    plt.rc('axes', prop_cycle=default_cycler)
+    plt.figure(figsize=(FIGURE_HALF_SIZE[0], 2.5))
+    plt.plot(theory_v, theory_k, ls="solid", label="Linear theory")
     plt.errorbar(
-        flow_velocity, arr_omega, yerr=arr_omega_err,
-        marker="p", color="black", markersize=10, ls=""
+        flow_velocity, arr_k, yerr=arr_k_err,
+        marker="o", markersize=10, ls="",
+        markeredgecolor="black", markeredgewidth=1,
+        label="Simulation"
     )
     plt.ylim(bottom=0)
     low, high = plt.gca().get_ylim()
@@ -319,17 +389,18 @@ def omegaVsAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=Fals
     )
     plt.xlim(95, 185)
     plt.ylim(low, high)
-    plt.xlabel(f"Initial flow velocity $u_\\alpha^{{t=0}}$ (km$\\,/\\,$s)")
-    plt.ylabel(f"Freqency $\\omega\\,/\\,\\omega_{{pp}}$ (1)")
+    plt.xlabel(f"Flow velocity $u_\\alpha^{{t=0}}$ (km$\\,/\\,$s)")
+    plt.ylabel(f"Wave number $k_\\text{{max}}\\,\\lambda_\\text{{D}}$ (1)")
+    plt.legend(loc="lower left", labelspacing=0.4)
     if save:
-        _saveFigure(f"omega-vs-alpha_flow_velocity", "alpha_flow_velocity_variation")
+        _saveFigure(f"k-vs-alpha_flow_velocity", "alpha_flow_velocity_variation")
 
 def psdOmegaForAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=False):
     assert e_field_component in ["x", "y"], "Unknown e-field component"
     files = sorted(V_FLOW_VARIATION_FOLDER.glob("*.h5"))
     flow_velocity = np.empty(len(files))
     plt.style.use(MPLSTYLE_FILE)
-    plt.figure()
+    plt.figure(figsize=FIGURE_FULL_SIZE)
     for file_idx, filename in enumerate(files):
         flow_velocity[file_idx] = int(filename.stem[-3:])
         with h5py.File(filename) as f:
@@ -346,26 +417,22 @@ def psdOmegaForAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=
         f *= 2 * np.pi
         def lorentzian( x, x0, gam, a, b):
             return a * gam**2 / ( gam**2 + ( x - x0 )**2) + b
-        from scipy import optimize
+
         popt, pcov = optimize.curve_fit(
             lambda x, x0, gam, a, b: np.log(lorentzian(x, x0, gam, a, b)),
             f[f<np.pi][1:], np.log(p_mean[f<np.pi][1:]),
             p0=[f[1:][np.argmax(p_mean[1:])], 0.05, np.max(p_mean[1:]), 0])
-        print(f"u_alpha = {flow_velocity[file_idx]}")
-        print(popt)
-        print(np.sqrt(np.diag(pcov)))
-        print()
         fit_f = np.linspace(0, np.pi, num=100)
-        plt.plot(fit_f, lorentzian(fit_f, *popt), color="black", lw=1)
+        # plt.plot(fit_f, lorentzian(fit_f, *popt), color="black", lw=1)
         plt.plot(
             f[1:], p_mean[1:], label=f"$u_\\alpha^{{t=0}}$={int(flow_velocity[file_idx])}"
         )
-    plt.xlabel("Frequency $\\omega\\,/\\,\\omega_{pp}$ (1)")
+    plt.xlabel("Frequency $\\omega\\,/\\,\\omega_\\text{pp}$ (1)")
     plt.ylabel(
-        f"$\\langle\\text{{PSD}}[E_{e_field_component}]\\rangle_\\mathbf{{r}}$ $(V^2/m^2)$"
+        f"$\\langle\\text{{PSD}}[E_{e_field_component}]\\rangle_\\mathbf{{r}}$ (V$^2\\,/\\,$m$^2$)"
     )
     plt.legend(
-        title=f"Initial flow velocity (km$\\,/\\,$s)",
+        title=f"Flow velocity (km$\\,/\\,$s)",
         ncols=2, labelspacing=.2, columnspacing=1
     )
     plt.xlim(0, np.pi)
@@ -386,8 +453,8 @@ def temperature3DOverTimeForAlphaFlowSpeed(info: RunInfo, species: Species, save
             time, physics.kelvinToElectronVolt(temp),
             label=f"$u_\\alpha^{{t=0}}$ = {v}"
         )
-    plt.legend(title="Flow velocity (km$\\,/\\,$s)")
-    plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
+    plt.legend(title="Flow velocity (km$\\,/\\,$s)", labelspacing=.4)
+    plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
     plt.ylabel(f"Temperature $T_{species.symbol()}$ (eV)")
     plt.xlim(0, 150.0)
     if save:
@@ -404,7 +471,6 @@ def temperatureDifferences3DVsAlphaFlowSpeed(
     for file_idx, filename in enumerate(files):
         velocity[file_idx] = int(filename.stem[-3:])
         with h5py.File(filename) as f:
-            time = f["Header/time"][:] * info.omega_pp
             temp = physics.kelvinToElectronVolt(
                 np.mean(f[f"Derived/Temperature/{species.value}"], axis=(1,2))
             )
@@ -417,20 +483,21 @@ def temperatureDifferences3DVsAlphaFlowSpeed(
         T_diff /= K_alpha_t0
         T_diff_err /= K_alpha_t0
     plt.style.use(MPLSTYLE_FILE)
-    plt.figure()
+    plt.figure(figsize=(FIGURE_HALF_SIZE[0], 2.5))
     plt.errorbar(
-        velocity, T_diff, yerr=T_diff_err, marker="p", color="black", markersize=10, ls=""
+        velocity, T_diff, yerr=T_diff_err, marker="o", color="black", markersize=10, ls=""
     )
     low, high = plt.gca().get_ylim()
     plt.fill_between([0.0, info.c_s * 1e-3], y1=low, y2=high, lw=2, color="lightgray", label="$u_{\\alpha} \\leq c_s$")
     plt.xlim(95, 185)
     plt.ylim(low, high)
-    plt.xlabel(f"Initial flow velocity $u_\\alpha^{{t=0}}$ (km$\\,/\\,$s)")
+    plt.xlabel(f"Flow velocity $u_\\alpha^{{t=0}}$ (km$\\,/\\,$s)")
+    plt.ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
     if normalize_temperature:
-        plt.ylabel(f"Temperature $\\Delta T_{species.symbol()}\\,/\\,K_\\alpha^{{t=0}}$ (1)")
+        plt.ylabel(f"Heating $\\Delta T_{species.symbol()}\\,/\\,K_\\alpha^{{t=0}}$ (1)")
     else:
-        plt.ylabel(f"Temperature $\\Delta T_{species.symbol()}$ (eV)")
-    plt.legend(loc="lower right")
+        plt.ylabel(f"Heating $\\Delta T_{species.symbol()}$ (eV)")
+    plt.legend(loc="best")
     if save:
         _saveFigure(
             f"temp_3D_{species.value.lower()}-vs-alpha_flow_velocity", "alpha_flow_velocity_variation"
@@ -451,13 +518,14 @@ def psdFlowVelocity(info: RunInfo, species: Species, space_dir: str, mom_dir: st
 
         u_x = analysis.flowVelocity1D(x_grid, px_grid, dist_x_px, info[species])
         f, Pxx = signal.periodogram(x=np.mean(u_x, axis=1), fs=1 / (0.1))
+        f *= 2 * np.pi
         plt.plot(f[1:], Pxx[1:], label=f"$u_\\alpha^{{t=0}}$={u_alpha}")
         if species == Species.ELECTRON:
             max_idx = np.argmax(Pxx[1:]) + 1
             print(f"{f[max_idx]} +- {f[max_idx] - f[max_idx-1]}")
             print(f[-1])
             break
-    plt.xlabel("Frequency $f\\,/\\,\\omega_{pp}$ (1)")
+    plt.xlabel("Frequency $\\omega\\,/\\,\\omega_\\text{pp}$ (1)")
     plt.ylabel(f"PSD$[\\langle u_{{e,{mom_dir}}}\\rangle_{space_dir}]$ (km$^2\\,/\\,$s$^2$)")
     plt.yscale("log")
     # plt.xscale("log")
@@ -465,7 +533,7 @@ def psdFlowVelocity(info: RunInfo, species: Species, space_dir: str, mom_dir: st
         title=f"Flow velocity (km$\\,/\\,$s)",
         labelspacing=.2, columnspacing=1, ncols=2,
     )
-    plt.xlim(1 / 150, 5)
+    plt.xlim(2 * np.pi / 150, 5 * 2 * np.pi)
     if save:
         _saveFigure(f"psd-flow_velocity-{species.value.lower()}", "alpha_flow_velocity_variation")
 
@@ -486,7 +554,7 @@ def flowVelocityVsTime(info: RunInfo, species: Species, space_dir: str, mom_dir:
         plt.plot(time, np.mean(u_x, axis=1) / (u_alpha * 1e3), label=f"$u_\\alpha^{{t=0}}$={u_alpha}")
         if species == Species.ELECTRON:
             break
-    plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
+    plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
     plt.ylabel(f"Flow velocity $u_{{{species.symbol()},{mom_dir}}}\\,/\\,u_\\alpha^{{t=0}}$ (1)")
     plt.legend(title="Flow velocity (km$\\,/\\,$s)", labelspacing=.2)
     plt.xlim(0, 150)
@@ -509,6 +577,7 @@ def energiesOverTime(filename: Path, info: RunInfo, save: bool=False, save_folde
         u_y = analysis.flowVelocity1D(x_grid, py_grid, dist_x_py, info[species])
         K = 0.5 * info[species].si_mass * np.mean(u_x ** 2 + u_y ** 2, axis=1) / constants.electron_volt
         U = 3 / 2 * physics.kelvinToElectronVolt(np.mean(T, axis=(1,2)))
+        print(f"{u_alpha} :: {species} | K_-1/K_0 = {K[-1] / K[0]} and U_-1/K_0 = {U[-1] / K[0]} and U_-1/U_0 = {U[-1] / U[0]}")
         W_species.append(info[species].number_density * (K + U))
     with h5py.File(filename) as f:
         time = f["Header/time"][:] * info.omega_pp
@@ -522,7 +591,7 @@ def energiesOverTime(filename: Path, info: RunInfo, save: bool=False, save_folde
     plt.plot(time[1:], W_E[1:] * 1e-6, label="$W_E$")
     plt.plot(time[1:], W_total[1:] * 1e-6, label="$W_\\text{total}$")
     plt.yscale("log")
-    plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
+    plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
     plt.ylabel("Energy density W (MeV$\\,/\\,$m$^3$)")
     plt.xlim(0.0, 150.0)
     plt.legend(ncols=3, labelspacing=.2, columnspacing=0.5)
@@ -557,12 +626,12 @@ def videoEFieldOverTime(
         0.95, 0.95,
         horizontalalignment='right',
         verticalalignment='top',
-        s=f"t$\\,\\omega_{{pp}}=\\,${time[0]:>5.1f}",
+        s=f"t$\\,\\omega_\\text{{pp}}=\\,${time[0]:>5.1f}",
         transform=ax.transAxes
     )
     ax.set(
-        xlabel = "Position x$\\,/\\,\\lambda_D$ (1)",
-        ylabel = "Position y$\\,/\\,\\lambda_D$ (1)",
+        xlabel = "Position x$\\,/\\,\\lambda_\\text{D}$ (1)",
+        ylabel = "Position y$\\,/\\,\\lambda_\\text{D}$ (1)",
         aspect = "equal"
     )
     divider = make_axes_locatable(ax)
@@ -576,7 +645,7 @@ def videoEFieldOverTime(
 
     def update(frame_idx):
         quad.set_array(E_field[frame_idx])
-        text.set_text(f"t$\\,\\omega_{{pp}}\\,=\\,${time[frame_idx]:>5.1f}")
+        text.set_text(f"t$\\,\\omega_\\text{{pp}}\\,=\\,${time[frame_idx]:>5.1f}")
         return text, quad
 
     ani = FuncAnimation(fig=fig, func=update, frames=range(len(list(time_steps))))
@@ -659,7 +728,7 @@ def videoPxPyDistribution(
     text = plt.text(0.95, 0.95,
             horizontalalignment='right',
             verticalalignment='top',
-            s=f"t$\\,\\omega_{{pp}}=\\,${time[0]:>5.1f}",
+            s=f"t$\\,\\omega_\\text{{pp}}=\\,${time[0]:>5.1f}",
             transform=ax.transAxes
     )
     if normalized_velocity:
@@ -673,7 +742,7 @@ def videoPxPyDistribution(
 
     def update(frame_idx):
         quad.set_array(f_v[frame_idx].T)
-        text.set_text(f"t$\\,\\omega_{{pp}}\\,=\\,${time[frame_idx]:>5.1f}")
+        text.set_text(f"t$\\,\\omega_\\text{{pp}}\\,=\\,${time[frame_idx]:>5.1f}")
         return (quad, text,)
 
     frames = list(range(len(list(time_steps))))
@@ -715,3 +784,54 @@ def pxPyDistribution(
         plt.ylabel(f"Velocity $v_{{{species.symbol()},y}}$ (km/s)")
     if save:
         _saveFigure(f"px_py_distribution-{species}-t={time}")
+
+def magneticFieldDirectionElectricField(
+    info: RunInfo,
+    save: bool=False,
+):
+    plt.style.use(MPLSTYLE_FILE)
+    plt.figure(figsize=FIGURE_FULL_SIZE)
+    for files, label, marker in zip([
+            sorted(V_FLOW_VARIATION_FOLDER.glob("*.h5")),
+            sorted((FOLDER_2D / "v_alpha_bulk_variation_Bx").glob("*.h5")),
+            sorted((FOLDER_2D / "v_alpha_bulk_variation_By").glob("*.h5")),
+            sorted((FOLDER_2D / "v_alpha_bulk_variation_Bz").glob("*.h5")),
+            sorted((FOLDER_2D / "v_alpha_bulk_variation_Bx_By").glob("*.h5")),
+        ], ["B=0", "B=B_x", "B=B_y", "B=B_z", "B_x=B_y"], MARKERS):
+        velocity = np.empty(len(files))
+        W_E_max = np.empty(len(files))
+        W_E_max_err = np.empty(len(files))
+        for file_idx, filename in enumerate(files):
+            velocity[file_idx] = int(filename.stem[-3:])
+            with h5py.File(filename) as f:
+                E_x = f['Electric Field/ex'][:]
+                E_y = f['Electric Field/ey'][:]
+            W_E = np.mean(E_x ** 2 + E_y ** 2, axis=(1,2)) * (constants.epsilon_0 / 2) / constants.electron_volt
+            max_idx = np.argmax(W_E)
+            max_range = W_E[max_idx-5:max_idx+5]
+            W_E_max[file_idx] = np.mean(max_range)
+            W_E_max_err[file_idx] = np.std(max_range)
+        velocity = np.array(velocity)
+        W_E_max = np.array(W_E_max)
+        W_E_max_err = np.array(W_E_max_err)
+        if True:
+            K_alpha_t0 = (info.alpha.si_mass * info.alpha.number_density * (velocity * 1e3) ** 2 / (2 * constants.electron_volt))
+            W_E_max /= K_alpha_t0
+            W_E_max_err /= K_alpha_t0
+
+        plt.errorbar(
+            velocity, W_E_max, yerr=W_E_max_err, label=f"${label}$", # color="black",
+            marker=marker, markeredgecolor="black", markeredgewidth=1, markersize=10, ls="")
+        y_min, y_max = plt.gca().get_ylim()
+    plt.fill_between(
+        [0.0, info.c_s * 1e-3], y1=y_min, y2=y_max,
+        lw=2, color="lightgray", label="$u_{\\alpha} \\leq c_s$"
+    )
+    plt.xlabel("Flow velocity $u_{\\alpha}^{t=0}$ (km/s)")
+    plt.ylabel("$\\max[\\langle W_E\\rangle_\\mathbf{r}]_t\\,/\\,K_\\alpha^{t=0}$  (1)")
+    plt.xlim(90, 190)
+    plt.ylim(y_min, y_max)
+    plt.legend(fancybox=False, edgecolor="black")
+    plt.tight_layout()
+    if save:
+        _saveFigure("max_electric_field_energy-vs-flow-velocity", "magentic_field_direction")

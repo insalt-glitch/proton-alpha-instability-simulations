@@ -4,6 +4,7 @@ from itertools import repeat
 import h5py
 import matplotlib.pyplot as plt
 from matplotlib import animation
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 from numpy.typing import NDArray
 from IPython.display import HTML
@@ -16,6 +17,8 @@ from .settings import (
     FIGURE_FORMAT,
     FIGURES_FOLDER,
     VIDEO_FORMAT,
+    FIGURE_FULL_SIZE,
+    FIGURE_HALF_SIZE,
 )
 
 def generalSaveFigure(fig_name: str, sub_folder: str|None=None) -> None:
@@ -146,8 +149,12 @@ def momentumDistributionComparison(
     legend_title: str|None=None,
     legend_ncols: int=1,
     legend_loc: str="best",
+    x_lim: tuple[float,float]|None=None,
+    y_lim: tuple[float|None,float|None]=(None,None),
+    x_ticks=None,
     normalized_velocity: bool=True,
     save: bool=False,
+    save_folder: str|None=None,
 ):
     assert isinstance(files, Path) or not isinstance(times, list), "Can only have multiple filesname or multiple times"
     assert legend_ncols >= 1, "Need at least one column"
@@ -174,7 +181,7 @@ def momentumDistributionComparison(
         if legend_title is None:
             legend_title = "Time $t\\,\\omega_{pp}$ (1)"
     plt.style.use(MPLSTYLE_FILE)
-    plt.figure()
+    plt.figure(figsize=FIGURE_HALF_SIZE)
     min_v, max_v = np.inf, - np.inf
     for t, filename, label in zip(times, files, labels):
         v, f_v = _loadSpaceMomDistribution(info, species, filename, dist_type, t, normalized_velocity)
@@ -188,12 +195,18 @@ def momentumDistributionComparison(
     if normalized_velocity:
         plt.xlabel(f"Velocity $v_{species.symbol()}\\,/\\,v^{{t=0}}_{species.symbol()}$ (1)")
     else:
-        plt.xlabel(f"Velocity $v_{species.symbol()}$ (km/s)")
-    plt.ylabel(f"$\\langle f_{species.symbol()}\\rangle_{{{dist_type.space().lower()}}}$ (s/m$^2$)")
-    plt.legend(title=legend_title, ncols=legend_ncols, loc=legend_loc)
-    plt.xlim(min_v, max_v)
+        plt.xlabel(f"Velocity $v_{species.symbol()}$ (km$\\,/\\$s)")
+    plt.ylabel(f"Distribution $\\langle f_{species.symbol()}\\rangle_{{{dist_type.space().lower()}}}$ (s$\\,/\\,$m$^2$)")
+    plt.legend(title=legend_title, ncols=legend_ncols, loc=legend_loc, labelspacing=0.2)
+    if x_lim is None:
+        x_lim = (min_v, max_v)
+    plt.xlim(x_lim)
+    if x_ticks is not None:
+        plt.xticks(x_ticks)
+    plt.ylim(y_lim)
+
     if save:
-        generalSaveFigure(f"{dist_type.momentum().lower()}_distribution-{species}")
+        generalSaveFigure(f"{dist_type.momentum().lower()}_distribution-{species}", save_folder)
 
 def spaceMomentumDistributon(
     info: RunInfo,
@@ -202,31 +215,119 @@ def spaceMomentumDistributon(
     filename: Path,
     time: float|int,
     normalized_velocity: bool=True,
+    v_lim: tuple[float|None,float|None]|None=None,
     save: bool=False,
 ):
     v, f_v = _loadSpaceMomDistribution(
-        info, species, filename, dist_type, 60.0, normalized_velocity
+        info, species, filename, dist_type, time, normalized_velocity
     )
     dv = abs(v[1] - v[0])
     v = np.concat([[v[0]-dv], v]) + dv / 2
 
     with h5py.File(filename) as f:
-        x_grid = f[f"Grid/grid/{dist_type.space()}"][:] / info.lambda_D
-    non_zero_v = v[np.nonzero(np.sum(f_v, axis=0)>0)]
-    f_v[f_v<=0] = np.min(f_v[f_v>0])
+        if f"Grid/grid/{dist_type.space()}" in f:
+            x_grid = f[f"Grid/grid/{dist_type.space()}"][:] / info.lambda_D
+        else:
+            x_grid = f["Grid/grid"][:] / info.lambda_D
 
     plt.style.use(MPLSTYLE_FILE)
-    plt.figure(figsize=(5.9, 3))
-    plt.pcolormesh(x_grid, v, f_v.T, norm="log")
-    plt.colorbar(label=f"$\\langle f_{species.symbol()}\\rangle_{{{dist_type.space()}}}$ (s/m$^2$)")
+    plt.figure(figsize=(FIGURE_FULL_SIZE[0], 1.5))
+    plt.pcolormesh(x_grid, v, f_v.T, norm="log", cmap=plt.cm.get_cmap("viridis"))
+    cax = plt.colorbar(label=f"$\\langle f_{species.symbol()}\\rangle_{{{dist_type.space()}}}$ (s$\\,/\\,$m$^2$)")
+    plt.gca().set_facecolor(cax.cmap.get_under())
     plt.xlabel(f"Position {dist_type.space().lower()}$\\,/\\,\\lambda_\\text{{D}}$ (1)")
     if normalized_velocity:
         plt.ylabel(f"Velocity $v_{species.symbol()}\\,/\\,v^{{t=0}}_{species.symbol()}$ (1)")
     else:
-        plt.ylabel(f"Velocity $v_{species.symbol()}$ (km/s)")
-    plt.ylim(np.min(non_zero_v), np.max(non_zero_v))
+        plt.ylabel(f"Velocity $v_{species.symbol()}$ (km$\\,/\\,$s)")
+    if v_lim is None:
+        v_lim = (np.min(v), np.max(v))
+    plt.ylim(v_lim)
+    plt.xticks(np.linspace(0, 128, 5))
     if save:
         generalSaveFigure(f"{dist_type}_distribution--{species}")
+
+def spaceVelocityDistributionMulti(
+    info: RunInfo,
+    species: Species,
+    dist_type: Distribution,
+    filename: Path,
+    times: tuple[float|int,float|int,float|int],
+    normalized_velocity: bool=True,
+    v_lim: tuple[float|None,float|None]|None=None,
+    v_ticks: list[float]|None=None,
+    save: bool=False,
+    save_folder: str|None=None,
+):
+    v_list = []
+    f_v_list = []
+    max_f = -np.inf
+    min_f = np.inf
+    for t in times:
+        v, f_v = _loadSpaceMomDistribution(
+            info, species, filename, dist_type, t, normalized_velocity
+        )
+        v_list.append(v)
+        f_v_list.append(f_v)
+        max_f = max(np.max(f_v), max_f)
+        min_f = min(np.min(f_v[f_v>0]), min_f)
+
+    plt.style.use(MPLSTYLE_FILE)
+    fig, axes = plt.subplots(
+        3, 1, figsize=(FIGURE_FULL_SIZE[0], 3.3),
+        sharex=True, height_ratios=(1,1,1),
+    )
+    axes: list[plt.Axes] = axes
+    for ax_idx, (t, ax, v, f_v) in enumerate(zip(times, axes, v_list, f_v_list)):
+        dv = abs(v[1] - v[0])
+        v = np.concat([[v[0]-dv], v]) + dv / 2
+
+        with h5py.File(filename) as f:
+            if f"Grid/grid/{dist_type.space()}" in f:
+                x_grid = np.squeeze(f[f"Grid/grid/{dist_type.space().lower()}"][:]) / info.lambda_D
+            else:
+                x_grid = np.squeeze(f["Grid/grid"][:]) / info.lambda_D
+        quad = ax.pcolormesh(
+            x_grid, v, f_v.T / max_f, norm="log",
+            cmap=plt.cm.get_cmap("viridis"),
+            vmin=min_f/max_f, vmax=1.0, rasterized=True,
+        )
+
+        if v_lim is None:
+            v_lim = (np.min(v), np.max(v))
+        ax.set(
+            ylim=v_lim,
+            facecolor=plt.cm.get_cmap("viridis").get_under(),
+        )
+        ax.text(
+            0.01, 0.95, s=f"$\\mathbf{{({chr(ord('a')+ax_idx)})\\,\\,t\\,\\omega_\\text{{pp}}={t}}}$",
+            horizontalalignment='left',
+            verticalalignment='top',
+            color="white",
+            transform=ax.transAxes,
+        )
+        if v_ticks is not None: ax.set_yticks(v_ticks)
+    axes[-1].set(
+        xlabel=f"Position {dist_type.space().lower()}$\\,/\\,\\lambda_\\text{{D}}$ (1)",
+        xticks=np.linspace(0, 128, 9),
+    )
+    if normalized_velocity:
+        y_label = f"$v_{species.symbol()}\\,/\\,v^{{t=0}}_{species.symbol()}$ (1)"
+    else:
+        y_label = f"$v_{species.symbol()}$ (km$\\,/\\,$s)"
+    axes[1].set_ylabel(f"Velocity {y_label}")
+    fig.colorbar(
+        quad,
+        ax=axes.ravel().tolist(),
+        orientation="vertical",
+        use_gridspec=True,
+        # fraction=0.03,
+        pad=0.02,
+        label=f"Distribution $\\langle f_{species.symbol()}\\rangle_{{{dist_type.space()}}}$ (s$\\,/\\,$m$^2$)",
+    )
+    # plt.tight_layout(pad=0.1)
+    if save:
+        generalSaveFigure(f"space-velocity-dist-multi-timestep_{species}", save_folder)
 
 def videoMomentumDistribution(
     info: RunInfo,
@@ -287,7 +388,7 @@ def videoMomentumDistribution(
         plt.xlabel(f"Velocity $v_{species.symbol()}\\,/\\,v^{{t=0}}_{species.symbol()}$ (1)")
     else:
         plt.xlabel(f"Velocity $v_{species.symbol()}$ (km/s)")
-    plt.ylabel(f"$\\langle f_{species.symbol()}\\rangle_{{{dist_type.space()}}}$ (s/m$^2$)")
+    plt.ylabel(f"$\\langle f_{species.symbol()}\\rangle_{{{dist_type.space()}}}$ (s$\\,/\\$m$^2$)")
     plt.xlim(np.min(v_limits), np.max(v_limits))
     if len(filenames) > 1:
         plt.legend(loc="lower center", title=legend_title, ncols=legend_ncols)

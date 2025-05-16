@@ -1,7 +1,7 @@
 from pathlib import Path
 from . import Variation
 
-RESULTS_FOLDER = Path("/media/nilsm/ext_ssd/sim_data")
+RESULTS_FOLDER = Path("/mnt/internal_hdd/sim_data")
 
 FOLDER_1D = RESULTS_FOLDER / "epoch_1D"
 PARTICLE_VARIATION_FOLDER = FOLDER_1D / "particle_variation"

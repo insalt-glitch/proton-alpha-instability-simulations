@@ -27,7 +27,11 @@ class SpeciesInfo:
     def omega(self: SpeciesInfo) -> float:
         """Angular plasma frequency (Hz)
         """
-        return physics.plasmaFrequency(self.mass, self.number_density)
+        return physics.plasmaFrequency(
+            self.mass,
+            self.charge,
+            self.number_density
+        )
 
     @property
     def v_thermal(self: SpeciesInfo) -> float:

@@ -39,18 +39,19 @@ def temperatureToThermalSpeed(temperature: ArrayLike, mass: ArrayLike) -> NDArra
         / (mass * const.electron_mass)
     )
 
-def plasmaFrequency(mass: ArrayLike, number_density: ArrayLike) -> NDArray | float:
+def plasmaFrequency(mass: ArrayLike, charge: ArrayLike, number_density: ArrayLike) -> NDArray | float:
     """Calculate the plasma frequency of a given species.
 
     Args:
         mass (ArrayLike): Mass (electron-mass)
+        charge (ArrayLike): Charge (electron-charge)
         density (ArrayLike): Number density (m^-3)
 
     Returns:
         NDArray | float: Plasma frequency (Hz)
     """
     return np.sqrt(
-        const.elementary_charge ** 2 * number_density
+        (charge * const.elementary_charge) ** 2 * number_density
         / (const.epsilon_0 * mass * const.electron_mass)
     )
 

@@ -79,9 +79,10 @@ for ratio_idx, (n_p, n_a, wpp, wpa) in enumerate(zip(
         k_max[ratio_idx] = k_arr[idxgam]
         omega_max[ratio_idx] = np.real(omega_arr[idxgam])
 
-import matplotlib.pyplot as plt
-plt.plot(nanp_ratio, np.abs(omega_max /wpp_arr))
-plt.plot(nanp_ratio, np.abs(k_max*ld))
-plt.plot(nanp_ratio, np.abs(gamma_max / wpp_arr))
-plt.xscale("log")
-plt.savefig("density_ratio.png", bbox_inches="tight", dpi=400)
+import h5py
+
+with h5py.File("theory_density_ratio.h5", mode="x") as f:
+    f["na_np_ratio"] = nanp_ratio
+    f["k_max"] = k_max
+    f["omega_max"] = omega_max
+    f["gamma_max"] = gamma_max

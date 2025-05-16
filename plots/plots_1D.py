@@ -6,13 +6,13 @@ import matplotlib.pyplot as plt
 import matplotlib
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
-from scipy import constants, signal
+from scipy import constants, signal, io
 import h5py
 
 import analysis
 import theory
-from basic import physics
-from .general import generalSaveFigure, plotEnergyEFieldOverTime
+from basic import physics, Distribution
+from .general import generalSaveFigure, plotEnergyEFieldOverTime, _loadSpaceMomDistribution
 
 from basic.paths import (
     RESULTS_FOLDER,
@@ -52,6 +52,7 @@ def electricFieldOverSpaceAndTime(
     plt.yticks(np.arange(5) * 32)
     plt.ylim(0, np.max(grid_edges))
     plt.xlim(0, 150)
+    plt.xticks(np.linspace(0, 150, 6))
     plt.tight_layout()
     if save:
         _saveFigure("e_field-vs-time-vs-space")
@@ -73,7 +74,7 @@ def avgTemperature3DOverTime(
     plt.plot(time, T_electron, ls="--", label="$T_e$")
     plt.plot(time, T_proton, ls=":", label="$T_p$")
     plt.plot(time, T_alpha, ls="solid", label="$T_\\alpha$")
-    plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
+    plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
     plt.ylabel("Temperature (eV)")
     plt.legend(loc="center left", fontsize=14)
     plt.xlim(time[0], time[-1])
@@ -98,12 +99,12 @@ def avgTemperatureXOverTime(
 
     plt.style.use(MPLSTYLE_FILE)
     if species == Species.ELECTRON:
-        plt.figure(figsize=(FIGURE_HALF_SIZE[0]-0.3, 2.5))
+        plt.figure(figsize=(FIGURE_HALF_SIZE[0]-0.26, 2.5))
     else:
         plt.figure(figsize=(FIGURE_HALF_SIZE[0], 2.5))
     plt.plot(time, temperature, label=f"$T_{{{species.symbol()},x}}$")
-    plt.plot(time, temp_3d, label=f"$T_{{{species.symbol()},\\text{{3D}}}}$")
-    plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
+    plt.plot(time, temp_3d, label=f"$T_{{{species.symbol()},\\text{{3D}}}}$", color="#aaaaaa")
+    plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
     plt.ylabel(f"Temperature $T_{{{species.symbol()}}}$ (eV)")
     plt.xlim(0, 150)
     plt.xticks(np.linspace(0, 150, 6))
@@ -155,12 +156,18 @@ def velocityDistributionOverTime(
 
 
 def velocityDistributionOverTimeCombined(
-    filename: Path, info: RunInfo, save: bool=False
+    filename: Path,
+    info: RunInfo,
+    times: list[float],
+    v_lim_arr: list[tuple[float|None,float|None]],
+    v_tick_arr: list[list[float]],
+    save: bool=False,
 ):
-    plt.style.use(MPLSTYLE_FILE)
-    fig, axes = plt.subplots(3, 1, figsize=(FIGURE_FULL_SIZE[0], 7), sharex=True)
-    Y_LIMS = [(-4, 4), (-4, 8), (-1, 8)]
-    for ax, species, y_lim in zip(axes, Species, Y_LIMS):
+    t_list = []
+    v_list = []
+    f_v_list = []
+    min_f = np.inf
+    for species in Species:
         with h5py.File(PARTICLE_VARIATION_FOLDER / "particles_8192/rep_0.h5") as f:
             time = f["Header/time"][:] * info.omega_pp
             x_grid = f[f"Grid/x_px/{species.value}/X"][:]
@@ -171,25 +178,84 @@ def velocityDistributionOverTimeCombined(
             x_grid, px_grid, dist, info[species]
         )
         relative_v = v / info[species].v_thermal
-        if relative_v.ndim > 1:
-            time = np.tile(time, (px_grid.shape[1], 1)).T
-            f_v = f_v.T
-        
-        quad = ax.pcolormesh(time, relative_v, f_v.T, norm="log", rasterized=True)
-        ax.set(
-            ylabel = (f"Velocity $v_{species.symbol()}\\,/\\,v^{{t=0}}_{{\\text{{th}},{species.symbol()}}}$ (1)"),
-            xlim = (0,150),
-            xticks = (np.linspace(0, 150, 6)),
-            ylim=y_lim,
+        if v.ndim > 1:
+            time = np.tile(time, (v.shape[1], 1)).T
+        f_v = f_v / np.max(f_v)
+        t_list.append(time)
+        v_list.append(relative_v)
+        f_v_list.append(f_v)
+        min_f = min(np.min(f_v[f_v>0]), min_f)
+
+    plt.style.use(MPLSTYLE_FILE)
+    fig, axes = plt.subplots(
+        2, 3, figsize=(FIGURE_FULL_SIZE[0]+0.5, 7),
+        sharey="row", sharex="col",
+        height_ratios=[0.3, 1],
+        width_ratios=[1,1,1.1]
+    )
+    axes: list[list[plt.Axes]] = axes
+    for ax_idx, (ax, species, v_lim, v_ticks, time, v, f_v) in enumerate(zip(
+        axes[1], Species, v_lim_arr, v_tick_arr, t_list, v_list, f_v_list,
+    )):
+        quad = ax.pcolormesh(
+            v, time, f_v, norm="log",
+            rasterized=True, cmap=plt.cm.get_cmap("viridis"),
+            vmin=min_f, vmax=1.0,
         )
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes("right", size="5%", pad=0.1)
-        cax = plt.colorbar(quad, label=f"$\\langle f_{species.symbol()}\\rangle_x$ (s$\\,/\\,$m$^2$)", cax=cax)
-        ax.set_facecolor(cax.cmap.get_under())
-    ax.set(xlabel="Time $t\\,\\omega_\\text{pp}$ (1)")
-    plt.tight_layout()
+        ax.text(
+            0.95, 0.98, s=f"$\\mathbf{{({chr(ord('d')+ax_idx)})}}$",
+            horizontalalignment='right',
+            verticalalignment='top',
+            color="white",
+            transform=ax.transAxes,
+        )
+        ax.set(
+            facecolor=plt.cm.get_cmap("viridis").get_under(),
+            xlabel = f"$v_{species.symbol()}\\,/\\,v^{{t=0}}_{{\\text{{th}},{species.symbol()}}}$ (1)",
+            xlim=v_lim,
+            xticks=v_ticks
+        )
+    divider = make_axes_locatable(axes[0,2])
+    empty_ax: plt.Axes = divider.append_axes("right", size="5%", pad=0.1)
+    empty_ax.set_axis_off()
+    divider = make_axes_locatable(axes[1,2])
+    cax = divider.append_axes("right", size="5%", pad=0.1)
+    fig.colorbar(
+        quad, cax=cax,
+        label=f"Distribution $\\langle f_{species.symbol()}\\rangle_x$ (a.u.)")
+    axes[1,0].set(
+        ylim = (0,150),
+        yticks = np.linspace(0, 140, 8),
+        ylabel="Time $t\\,\\omega_\\text{pp}$ (1)",
+    )
+
+    for ax_idx, (species, v_lim, v_ticks, ax) in enumerate(zip(
+        Species, v_lim_arr, v_tick_arr, axes[0]
+    )):
+        max_f = - np.inf
+        for t in times:
+            v, f_v = _loadSpaceMomDistribution(info, species, filename, Distribution.X_PX, t, True)
+            f_v = np.mean(f_v, axis=0)
+            max_f = max(np.max(f_v), max_f)
+            ax.plot(v, f_v / max_f, label=f"$t\\,\\omega_\\text{{pp}}={int(t)}$")
+        if ax_idx == 1:
+            ax.legend(labelspacing=0.2, loc=(0.45, 0.6), fontsize=10, handletextpad=0.3, handlelength=1.4)
+            ax.set_zorder(10)
+        ax.text(
+            0.95, 0.95 if ax_idx != 1 else 0.5, s=f"$\\mathbf{{({chr(ord('a')+ax_idx)})}}$",
+            horizontalalignment='right',
+            verticalalignment='top',
+            transform=ax.transAxes,
+        )
+    axes[0,0].set(
+        ylabel=f"$\\langle f_{species.symbol()}\\rangle_x$ (a.u.)",
+        yscale="log",
+        ylim=(1e-3, None),
+    )
+
+    plt.tight_layout(w_pad=-1.8, h_pad=0.04)
     if save:
-        _saveFigure(f"velocity_dist-vs-time")
+        _saveFigure(f"velocity_dist-vs-time-all-species")
 
 def energyEFieldOverTime(
     filename: Path,
@@ -199,7 +265,11 @@ def energyEFieldOverTime(
 ):
     with h5py.File(filename) as f:
         time = f["Header/time"][:] * info.omega_pp
-        energy = np.mean(f["Electric Field/ex"][:] ** 2, axis=1) * (constants.epsilon_0 / 2) / (constants.electron_volt)
+        energy = f["Electric Field/ex"][:] ** 2
+    energy = np.mean(
+        energy,
+        axis=tuple(range(1, energy.ndim))
+    ) * (constants.epsilon_0 / 2) / (constants.electron_volt)
 
     plt.style.use(MPLSTYLE_FILE)
     plt.figure(figsize=FIGURE_FULL_SIZE)
@@ -283,7 +353,7 @@ def particleVariationEnergyVsTime(
         plt.plot(time[5:-5], W_E, label=num_p)
     plt.plot(p8192_time[5:-5], p8192_energy, label=8192)
     plt.yscale("log")
-    plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
+    plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
     plt.ylabel("Energy $W_E$ (eV$\\,/\\,$m$^3$)")
     plt.legend(title="Simulated particles $N_\\text{sim}\\,/\\,N_c$", ncols=2)
     plt.xlim(time[0], time[-1])
@@ -388,7 +458,7 @@ def particleVariationTemperatureXVsTime(
     plt.figure()
     plt.plot(time, np.mean(temperature[2:], axis=1).T, label=particle_numbers[2:])
     plt.plot(p8192_time, p8192_temperature, label=8192)
-    plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
+    plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
     plt.ylabel("Temperature $T_x$ (eV)")
     plt.xlim(time[0], time[-1])
     plt.legend(title="Simulated particles $N_\\text{sim}\\,/\\,N_c$ (1)", ncols=2)
@@ -573,3 +643,281 @@ def particleVariationGrowthRate(
                handler_map={tuple: matplotlib.legend_handler.HandlerTuple(ndivide=None)})
     if save:
         _saveFigure("growth_rate-vs-num_particles", "particles_per_cell")
+
+def linearTheoryDensityRatio(info: RunInfo, save: bool=False):
+    import theory
+    with h5py.File("theory_density_ratio.h5") as f:
+        na_np = f["na_np_ratio"][:]
+        n_p = info.electron.number_density / (2 * na_np + 1)
+        omega_pp = physics.plasmaFrequency(
+            info.proton.mass,
+            info.proton.charge,
+            n_p
+        )
+        k_max = f["k_max"] * info.lambda_D
+        omega_max = f["omega_max"] / omega_pp
+        gamma_max = f["gamma_max"] / omega_pp
+    plt.style.use(MPLSTYLE_FILE)
+    plt.figure(figsize=FIGURE_FULL_SIZE)
+    plt.plot(na_np, gamma_max, label="$\\gamma_\\text{max}\\,/\\,\\omega_\\text{pp}$", color="cornflowerblue")
+    plt.plot(na_np, omega_max, label="$\\omega_\\text{max}\\,/\\,\\omega_\\text{pp}$", color="#888888")
+    plt.plot(na_np, k_max, label="$k_\\text{max}\\,\\lambda_\\text{D}$", color="black")
+    plt.xscale("log")
+    plt.xlim(1e-3, 1e1)
+    plt.xlabel("Density ratio $n_\\alpha\\,/\\,n_\\text{p}$ (1)")
+    plt.ylabel("Wave properties (1)")
+    plt.legend()
+    if save:
+        generalSaveFigure("linear_theory-density_ratio")
+
+def linearTheoryFlowVelocity(info: RunInfo, save: bool=False):
+    with h5py.File("theory_u_alpha_dispersion.h5") as f:
+        u_alpha = f["u_alpha_bulk"][:] * 1e-3
+        gamma = f["gamma_max"][:] / info.omega_pp
+        theta = f["theta_max"][:] * 180 / np.pi
+        k_vec = f["k_max"][:] * info.lambda_D
+        omega = f["omega_max"][:] / info.omega_pp
+
+    plt.style.use(MPLSTYLE_FILE)
+    plt.figure(figsize=FIGURE_FULL_SIZE)
+    plt.plot(
+        u_alpha, gamma, color="cornflowerblue",
+        label="$\\gamma_\\text{max}\\,/\\,\\omega_\\text{pp}$")
+    plt.plot(
+        u_alpha, omega, color="#888888",
+        label="$\\omega_\\text{max}\\,/\\,\\omega_\\text{pp}$")
+    plt.plot(
+        u_alpha, k_vec, color="black",
+        label="$k_\\text{max}\\,\\lambda_\\text{D}$")
+    plt.plot(
+        u_alpha, theta * np.pi / 180, label="$\\theta_\\text{max}$")
+    # plt.xscale("log")
+    plt.xlim(55, 200)
+    plt.xlabel("Flow velocity $u_\\alpha^{t=0}$ (km$\\,/\\,$s)")
+    plt.ylabel("Wave properties (1)")
+    plt.legend(loc=(0.7, 0.25))
+    if save:
+        generalSaveFigure("linear_theory-flow_velocity")
+
+def linearTheoryWaveProperties(info: RunInfo, save: bool=False):
+    plt.style.use(MPLSTYLE_FILE)
+    fig, axes = plt.subplots(1, 2, figsize=(FIGURE_FULL_SIZE[0], 3.2), sharey=True)
+    axes: list[plt.Axes] = axes
+
+    with h5py.File("theory_density_ratio.h5") as f:
+        na_np = f["na_np_ratio"][:]
+        n_p = info.electron.number_density / (2 * na_np + 1)
+        omega_pp = physics.plasmaFrequency(
+            info.proton.mass,
+            info.proton.charge,
+            n_p
+        )
+        k_max = f["k_max"] * info.lambda_D
+        omega_max = f["omega_max"] / omega_pp
+        gamma_max = f["gamma_max"] / omega_pp
+
+    axes[0].plot(na_np, gamma_max, label="$\\gamma_\\text{max}\\,/\\,\\omega_\\text{pp}$", color="cornflowerblue")
+    axes[0].plot(na_np, omega_max, label="$\\omega_\\text{max}\\,/\\,\\omega_\\text{pp}$", color="#888888")
+    axes[0].plot(na_np, k_max, label="$k_\\text{max}\\,\\lambda_\\text{D}$", color="black")
+    axes[0].set(
+        xscale="log",
+        xlim=(1e-3, 1e1),
+        xlabel="Density ratio $n_\\alpha\\,/\\,n_\\text{p}$ (1)",
+        ylabel="Wave properties (1)",
+    )
+    axes[0].legend(labelspacing=0.4, loc=(0.05, 0.15))
+
+    with h5py.File("theory_u_alpha_dispersion.h5") as f:
+        u_alpha = f["u_alpha_bulk"][:] * 1e-3
+        gamma = f["gamma_max"][:] / info.omega_pp
+        theta = f["theta_max"][:] * 180 / np.pi
+        k_vec = f["k_max"][:] * info.lambda_D
+        omega = f["omega_max"][:] / info.omega_pp
+
+    axes[1].plot(
+        u_alpha, gamma, color="cornflowerblue",
+        label="$\\gamma_\\text{max}\\,/\\,\\omega_\\text{pp}$")
+    axes[1].plot(
+        u_alpha, omega, color="#888888",
+        label="$\\omega_\\text{max}\\,/\\,\\omega_\\text{pp}$")
+    axes[1].plot(
+        u_alpha, k_vec, color="black",
+        label="$k_\\text{max}\\,\\lambda_\\text{D}$")
+    axes[1].plot(
+        u_alpha, theta * np.pi / 180,
+        label="$\\theta_\\text{max}$",
+        color="orange", ls="-."
+    )
+    # magic = np.arccos((omega / k_vec * info.omega_pp * info.lambda_D + 30_000) / (u_alpha * 1e3))
+    # print(magic)
+    # axes[1].plot(u_alpha, magic, color="black")
+    axes[1].set(
+        xlim=(55, 200),
+        xlabel="Flow velocity $u_\\alpha^{t=0}$ (km$\\,/\\,$s)",
+        # ylabel="Wave properties (1)",
+    )
+    axes[1].legend(loc=(0.48, 0.18), labelspacing=0.4)
+    axes[0].text(
+        0.05, 0.95, s="$\\mathbf{(a)}$",
+        horizontalalignment="left",
+        verticalalignment="top",
+        transform=axes[0].transAxes,
+    )
+    axes[1].text(
+        0.05, 0.95, s="$\\mathbf{(b)}$",
+        horizontalalignment="left",
+        verticalalignment="top",
+        transform=axes[1].transAxes,
+    )
+    plt.tight_layout(w_pad=-0.5)
+    if save:
+        generalSaveFigure("linear_theory-wave_properties")
+
+def illustrateVelocitySpace(info: RunInfo, save: bool=False):
+    v_ph = 69
+    v_th = np.sqrt(3/2) * info.alpha.v_thermal * 1e-3
+    u_alpha = 120
+    theta = np.arccos((v_ph + v_th) / u_alpha, out=np.array(0.0), where=v_ph / (u_alpha - v_th) < 1)
+    # phase velocity circle and gradient circle
+    alpha = np.linspace(0, 2 * np.pi, num=100)
+    plt.style.use(MPLSTYLE_FILE)
+    plt.figure(figsize=FIGURE_FULL_SIZE)
+    plt.plot(v_ph * np.sin(alpha), v_ph * np.cos(alpha), ls=":", lw=2, label="$\\mathbf{v}\\cdot\\mathbf{v}_\\text{ph}=v_\\text{ph}^2$", color="#000000")
+    plt.plot(u_alpha + v_th * np.sin(alpha), v_th * np.cos(alpha), ls=(0, (3,1,1,1)), lw=2, label="$\\mathbf{v}\\cdot\\mathbf{u}_\\alpha=v_{\\text{th},\\alpha}^2$", color="#2C2CEA")
+    alpha = np.linspace(-theta, theta)
+    plt.plot(0.5 * v_ph * np.cos(alpha), 0.5 * v_ph * np.sin(alpha), color="black", ls="-", lw=1.5)
+    plt.text(
+        v_ph / 4, 0, s=r"$2\theta$",
+        horizontalalignment="left",
+        verticalalignment="center",
+    )
+    # proton and alpha max
+    plt.plot(0,0, ls="", marker="o", color="black", label="$\\langle f_\\text{p}\\rangle$")
+    plt.plot(u_alpha, 0, ls="", marker="p", color="#2C2CEA", label="$\\langle f_\\alpha\\rangle$")
+    # Interaction center
+    s = np.array([-1_000, 1_000])
+    plt.plot(
+        v_ph * np.cos(theta) + np.sin(theta) * s,
+        v_ph * np.sin(theta) - np.cos(theta) * s,
+        ls="--", color="#900000"
+    )
+    plt.plot(
+        +v_ph * np.cos(theta) + np.sin(theta) * s,
+        -v_ph * np.sin(theta) + np.cos(theta) * s,
+        ls="--", color="#900000"
+    )
+    # interaction regions
+    width = 40
+    rect_pos = plt.Rectangle(
+        xy=(
+            (v_ph - width / 2) * np.cos(theta) + np.sin(theta) * (-2 * v_ph),
+            (v_ph - width / 2) * np.sin(theta) - np.cos(theta) * (-2 * v_ph)
+        ),
+        width=1000, height=width, angle=theta * 180 / np.pi+270, edgecolor="black", zorder=1, facecolor="#dc7800", alpha=0.7
+    )
+    rect_neg = plt.Rectangle(
+        xy=(
+            +(v_ph + width / 2) * np.cos(theta) + np.sin(theta) * (-2 * v_ph),
+            -(v_ph + width / 2) * np.sin(theta) + np.cos(theta) * (-2 * v_ph)
+        ),
+        width=1000, height=width, angle=-theta * 180 / np.pi+90, edgecolor="black", zorder=1, facecolor="#dc7800", alpha=0.7
+    )
+    ann = plt.annotate(
+        text='', xy=((v_ph + 3) * np.cos(theta), (v_ph + 3) * np.sin(theta)),
+        xytext=(0,0), arrowprops=dict(arrowstyle='->', lw=2)
+    )
+    ann = plt.annotate(
+        text='', xy=((v_ph + 3) * np.cos(theta), -(v_ph + 3) * np.sin(theta)),
+        xytext=(0,0), arrowprops=dict(arrowstyle='->', lw=2)
+    )
+
+    delta = 120
+    ann = plt.annotate(
+        text='', xy=(
+            (v_ph - width/2 - 3) * np.cos(theta) + np.sin(theta) * delta,
+            (v_ph - width/2 - 3) * np.sin(theta) - np.cos(theta) * delta
+        ),
+        xytext=(
+            (v_ph + width/2 + 3) * np.cos(theta) + np.sin(theta) * delta,
+            (v_ph + width/2 + 3) * np.sin(theta) - np.cos(theta) * delta
+        ), arrowprops=dict(arrowstyle='<->', lw=2, color="#693a00")
+    )
+    ann = plt.annotate(
+        text='', xy=(
+            (v_ph - width/2 - 3) * np.cos(theta) + np.sin(theta) * delta,
+            -(v_ph - width/2 - 3) * np.sin(theta) + np.cos(theta) * delta
+        ),
+        xytext=(
+            (v_ph + width/2 + 3) * np.cos(theta) + np.sin(theta) * delta,
+            -(v_ph + width/2 + 3) * np.sin(theta) + np.cos(theta) * delta
+        ), arrowprops=dict(arrowstyle='<->', lw=2, color="#693a00")
+    )
+    plt.text(
+        0.02, 0.97, s=r"$u_\alpha = v_\text{ph} + v_{\text{th},\alpha}$",
+        horizontalalignment="left",
+        verticalalignment="top",
+        transform=plt.gca().transAxes,
+    )
+    plt.gca().add_patch(rect_pos)
+    plt.gca().add_patch(rect_neg)
+    plt.gca().set_aspect("equal")
+    plt.xlim(-80, 160)
+    plt.ylim(-80, 80)
+    plt.xlabel(r"Velocity $v_x/v_\text{ph}$")
+    plt.ylabel(r"Velocity $v_y/v_\text{ph}$")
+    plt.xticks([-v_ph, 0, v_ph, 2*v_ph], ["-1", "0", "1", "2"])
+    plt.yticks([-v_ph, 0, v_ph], ["-1", "0", "1"])
+    [h, l] = plt.gca().get_legend_handles_labels()
+    plt.legend(
+        [(h + [
+            plt.scatter(1e3, 1e3, c='black', marker='$\\longrightarrow$', s=300),
+            plt.scatter(1e3, 1e3, c='#693a00', marker='$⟷$', s=300)
+        ])[i] for i in (0,1,4,2,3,5)],
+        [(l+["$\\mathbf{v}_\\text{ph}$", r"$\partial f_s\,/\,\partial t$"])[i] for i in (0,1,4,2,3,5)],
+        ncols=2, labelspacing=0.0, loc="lower left", columnspacing=0.5)
+    if save:
+        generalSaveFigure("velocity_space-illustration")
+
+def illustrateSimulationGrid(save: bool=False):
+    rng = np.random.default_rng(2)
+    plt.style.use(MPLSTYLE_FILE)
+    plt.figure(figsize=(FIGURE_FULL_SIZE[0], 3))
+    plt.plot(0.1 + rng.random(100) * 3.8, rng.random(100) * 2, ls="", marker="o", markersize=3, color="#aaaaaa")
+    plt.plot(3.15, 0.85, ls="", marker="o", markersize=5, markeredgecolor="black", markeredgewidth=1, color="#666666")
+    plt.arrow(3.15, 0.85, -0.27, 0.25, head_width=0.04, width=0.01, color="black", length_includes_head=True)
+    plt.text(
+        2.85, 1.17, "$\\mathbf{v}_\\text{n}\\,\\Delta t$",
+        horizontalalignment="left", verticalalignment="center")
+    plt.text(
+        3.24, 0.93, "$\\mathbf{x}_\\text{n}$",
+        horizontalalignment="center", verticalalignment="center")
+    # plt.fill_between([2/3, 4/3],[4/3, 4/3], [6/3, 6/3], zorder=2, alpha=0.6, color="darkorange")
+    for i in np.linspace(0, 4, 7):
+        plt.plot([i,i], [0,2], ls="-", color="black")
+    for j in np.linspace(0, 2, 4):
+        plt.plot([0,4], [j,j], ls="-", color="black")
+    plt.arrow(
+        -0.08,0,0,2/3, head_width=0.04, width=0.01,
+        color="black", length_includes_head=True)
+    plt.text(
+        -0.08,2/3/2, s="$\\Delta y$", rotation=90,
+        horizontalalignment="right", verticalalignment="center")
+    plt.arrow(0,-0.08,2/3,0, head_width=0.04, width=0.01,
+        color="black", length_includes_head=True)
+    plt.text(
+        2/3/2,-0.12, s="$\\Delta x$",
+        horizontalalignment="center", verticalalignment="top")
+    plt.plot(*np.array([
+            (i,j) for i in np.linspace(0, 4, 7) for j in np.linspace(0, 2, 4)
+        ]).T,
+        color="#3333FF", ls="", marker="s", markersize=4, zorder=5)
+    plt.text(0, 2.05,
+        s="$\\mathbf{E}_\\text{n},\\mathbf{B}_\\text{n},\\mathbf{J}_\\text{n}$",
+        horizontalalignment="center", verticalalignment="bottom", color="#3333ff")
+    plt.text(-0.2, 4/3, "$\\mathbf{\\vdots}$", horizontalalignment="center", verticalalignment="center", color="#3333ff")
+    plt.text(2/3, 2.05, "$\\mathbf{\\dots}$", horizontalalignment="center", verticalalignment="bottom", color="#3333ff")
+    plt.text(2/3-0.1, 4/3+0.07, "$\\mathbf{\\ddots}$", horizontalalignment="right", verticalalignment="bottom", color="#3333ff")
+    plt.gca().set_axis_off()
+    plt.gca().set_aspect("equal")
+    if save:
+        generalSaveFigure("simulation_grid-illustration")

@@ -20,7 +20,7 @@ def propertiesAtMaxGrowthRate(
     omega_mat   = np.full_like(kz_mat, fill_value=np.nan, dtype=np.complex128)
 
     # calculate dispersion on grid
-    for theta_idx, kz_arr in enumerate(kz_mat):
+    for theta_idx, kz_arr in enumerate(tqdm(kz_mat, leave=False)):
         for k_idx, (k, kz) in enumerate(zip(k_arr, kz_arr)):
             xip = lambda omega: omega / (k * vp)
             xie = lambda omega: omega / (k * ve)
@@ -29,8 +29,9 @@ def propertiesAtMaxGrowthRate(
             def disprel(omega):
                 omega = omega[0] + 1j * omega[1]
                 result = (
-                    1 + 2 * omega_pp ** 2 / (k ** 2 * vp ** 2) *
-                    (1 + 1j * np.sqrt(np.pi) * xip(omega) * special.wofz(xip(omega))) +
+                    1
+                    + 2 * omega_pp ** 2 / (k ** 2 * vp ** 2) * (
+                        1 + 1j * np.sqrt(np.pi) * xip(omega) * special.wofz(xip(omega))) +
                     + 2 * omega_pe ** 2 / (k ** 2 * ve ** 2) * (
                         1 + 1j * np.sqrt(np.pi) * xie(omega) * special.wofz(xie(omega))) +
                     + 2 * omega_pa ** 2 / (k ** 2 * va ** 2) * (
@@ -39,9 +40,9 @@ def propertiesAtMaxGrowthRate(
                 return [np.real(result), np.imag(result)]
 
             if k_idx < 10:
-                omega0 = cs * k / 2
+                omega0 = cs * k / 2 + 500j
             else:
-                omega0 = omega_arr[k_idx-1]
+                omega0 = omega_arr[k_idx-1] + 0.01j * omega_pp
 
             sol = optimize.root(
                 disprel, x0=[np.real(omega0), np.imag(omega0)],
@@ -64,7 +65,7 @@ def propertiesAtMaxGrowthRate(
     return gamma_max, theta_max, k_max, omega_max
 
 if __name__ == "__main__":
-    OUTPUT_FILENAME = Path("theory_u_alpha_dispersion.h5")
+    OUTPUT_FILENAME = Path("theory_u_alpha_dispersion_v2.h5")
     info = RunInfo(
         electron=SpeciesInfo(
             number_density=12.0e6,
@@ -89,7 +90,7 @@ if __name__ == "__main__":
         )
     )
     assert not OUTPUT_FILENAME.exists(), "Cannot overwrite output-file."
-    ua_bulk_arr = np.linspace(80e3, 200e3, num=61)
+    ua_bulk_arr = np.linspace(50e3, 200e3, num=76)
     theta_arr = np.linspace(0, 90, num=451) * np.pi / 180
     k_arr: np.ndarray = np.linspace(0.5, 1.0, num=251) / info.lambda_D
     kz_mat = k_arr * np.cos(theta_arr)[:,np.newaxis]
@@ -107,7 +108,7 @@ if __name__ == "__main__":
     )
     tqdm.set_lock(RLock())
     with ThreadPoolExecutor(
-        max_workers=4,
+        max_workers=8,
         initializer=tqdm.set_lock,
         initargs=(tqdm.get_lock(),)
     ) as pool:
@@ -120,7 +121,7 @@ if __name__ == "__main__":
     theta_max = results[1]
     k_max = results[2]
     omega_max = results[3]
-    with h5py.File("theory_u_alpha_dispersion.h5", mode="x") as f:
+    with h5py.File(OUTPUT_FILENAME, mode="x") as f:
         f["search_space/theta"] = theta_arr
         f["search_space/theta"].attrs["unit"] = "radians"
         f["search_space/k"] = k_arr
