@@ -16,6 +16,7 @@ def fitGrowthRate(
     polynomial_degree: int=7,
     min_interval_length: float=5.0,
     allowed_slope_deviation: float=0.2,
+    reverse_search_direction: bool=False,
 ) -> tuple[
     LinregressResult,
     NDArray,
@@ -66,6 +67,8 @@ def fitGrowthRate(
         return None
     # get turning point to the right of extrema
     turn_p_idx = np.argmax(poly_turn_p > poly_extrema[left_extrema_idx])
+    if reverse_search_direction:
+        turn_p_idx = np.nonzero(poly_turn_p < poly_extrema[left_extrema_idx+1])[0][-1]
     slope_turn_p = dpoly_dt1(poly_turn_p[turn_p_idx])
     # get regime that is similar to the slope of turning point
     time_interval = np.linspace(
@@ -93,7 +96,38 @@ def fitGrowthRate(
         or slope_turn_p <= 0.0
         or time_bounds[1] - time_bounds[0] <= min_interval_length
     ):
-        return None
+        # try again with right extrema first
+        right_extrema_idx = np.argmax(poly(poly_extrema))
+        if right_extrema_idx == 0:
+            return None
+        turn_p_idx = np.nonzero(poly_turn_p < poly_extrema[right_extrema_idx])[0][-1]
+        slope_turn_p = dpoly_dt1(poly_turn_p[turn_p_idx])
+
+        time_interval = np.linspace(
+            poly_extrema[right_extrema_idx-1],
+            poly_extrema[right_extrema_idx],
+            num=time.size
+        )
+        rel_slope_difference = np.abs((dpoly_dt1(time_interval) - slope_turn_p) / slope_turn_p)
+        time_bounds = time_interval[(rel_slope_difference < allowed_slope_deviation)][[0,-1]]
+        time_bounds[0] = poly_turn_p[turn_p_idx]
+        # compute fit on the interval that we found
+        fit_interval_idx = [
+            np.argmin(np.abs(time - time_bounds[0])),
+            np.argmin(np.abs(time - time_bounds[1]))
+        ]
+        fit_interval_slice = slice(*fit_interval_idx)
+        fit_result: LinregressResult = stats.linregress(
+            time[fit_interval_slice],
+            np.log(field_energy[fit_interval_slice]),
+            alternative='less'
+        )
+        if (
+            fit_result.slope <= 0.0
+            or slope_turn_p <= 0.0
+            or time_bounds[1] - time_bounds[0] <= min_interval_length
+        ):
+            return None
     return fit_result, fit_interval_idx, (
         poly,
         poly_extrema[left_extrema_idx:left_extrema_idx+2],
@@ -405,7 +439,6 @@ def estimateFrequency(
     axis_grid: NDArray,
     E_field: NDArray,
     n_spatial_dims: int = 1,
-    peak_cutoff: float=0.95
 ) -> tuple[NDArray|float, float]:
     """Estimate frequency in some direction.
 
@@ -418,21 +451,21 @@ def estimateFrequency(
     Returns:
         tuple[NDArray|float, float]: Frequency and corresponding error.
     """
-    assert 0.0 <= peak_cutoff <= 1.0, "Peak cutoff must be non-negative and less than or equal to 1"
     assert n_spatial_dims >= 0, "Number of spatial diemnsions must be positive"
     assert -(n_spatial_dims + 1) <= axis <= -1, "Expect axis layout with spatial and temporal dimension"
     assert E_field.ndim >= (n_spatial_dims + 1), "E-field needs at least space and time dimensions"
     dx = abs(axis_grid[1] - axis_grid[0])
     fft = np.abs(np.fft.rfft(E_field, axis=axis)) ** 2
-    mean_axes = tuple(-(i+1) for i in range(n_spatial_dims+1) if i != -(axis + 1))
-    mean_fft = np.mean(fft, axis=mean_axes)
-    # compute fractional index of peak center
-    peak_index = np.apply_along_axis(
-        lambda x: np.argmax(x, axis=-1), # np.mean(np.nonzero(x > peak_cutoff * np.max(x, axis=-1))[0]),
-        axis=-1,
-        arr=mean_fft
-    )
     N = E_field.shape[axis]
-    k = 2 * np.pi * peak_index / (dx * N)
-    k_err = 2 * np.pi * np.sqrt(2) / (dx * N)
-    return k, k_err
+    # NOTE: Alternative estimation via weighted_mean(argmax_k(fft))
+    # k_arr = 2 * np.pi * np.argmax(fft, axis=axis) / (dx * N)
+    # weights = np.max(fft, axis=axis)
+    # weights /= np.sum(weights, axis=tuple(-(i+1) for i in range(n_spatial_dims)))
+    # k = np.sum(k_arr * weights, axis=tuple(-(i+1) for i in range(n_spatial_dims)))
+
+    # estimate index of peak center
+    mean_fft = np.mean(fft, axis=tuple(-(i+1) for i in range(n_spatial_dims + 1) if -(i+1) != axis))
+    print(np.argmax(mean_fft, axis=-1))
+    k = 2 * np.pi * np.argmax(mean_fft, axis=-1) / (dx * N)
+    k_sys_err = np.pi / (dx * N)
+    return k, k_sys_err

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
-from scipy import constants, signal, io
+from scipy import constants, optimize, signal, io
 import h5py
 
 import analysis
@@ -18,10 +18,13 @@ from basic.paths import (
     RESULTS_FOLDER,
     FOLDER_1D,
     PARTICLE_VARIATION_FOLDER,
+    DENSITY_VARIATION_FOLDER,
+    THEORY_DENSITY_RATIO_FILE,
+    THEORY_U_ALPHA_FILE,
     MPLSTYLE_FILE,
 )
 from plots.settings import FIGURE_HALF_SIZE, FIGURE_FULL_SIZE
-from basic import RunInfo, Species
+from basic import RunInfo, Species, SpeciesInfo
 
 def _saveFigure(fig_name: str, sub_folder: str|None = None):
     if sub_folder is None:
@@ -96,16 +99,16 @@ def avgTemperatureXOverTime(
 
     time *= info.omega_pp
     temperature = analysis.temperature1D(x_grid, px_grid, dist, info[species])
-
+    print(temperature[0], temperature[-1])
     plt.style.use(MPLSTYLE_FILE)
     if species == Species.ELECTRON:
         plt.figure(figsize=(FIGURE_HALF_SIZE[0]-0.26, 2.5))
     else:
         plt.figure(figsize=(FIGURE_HALF_SIZE[0], 2.5))
     plt.plot(time, temperature, label=f"$T_{{{species.symbol()},x}}$")
-    plt.plot(time, temp_3d, label=f"$T_{{{species.symbol()},\\text{{3D}}}}$", color="#aaaaaa")
+    plt.plot(time, temp_3d, label=f"$T_{{{species.symbol()}}}$", color="#aaaaaa")
     plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
-    plt.ylabel(f"Temperature $T_{{{species.symbol()}}}$ (eV)")
+    plt.ylabel(f"Temperature $T$ (eV)")
     plt.xlim(0, 150)
     plt.xticks(np.linspace(0, 150, 6))
     plt.legend(labelspacing=0.4, loc="best" if species != Species.ELECTRON else (0.02,0.72))
@@ -211,7 +214,7 @@ def velocityDistributionOverTimeCombined(
         )
         ax.set(
             facecolor=plt.cm.get_cmap("viridis").get_under(),
-            xlabel = f"$v_{species.symbol()}\\,/\\,v^{{t=0}}_{{\\text{{th}},{species.symbol()}}}$ (1)",
+            xlabel = f"$v_{species.symbol()}\\,/\\,v^{{t=0}}_{{\\text{{t}}{species.symbol()}}}$ (1)",
             xlim=v_lim,
             xticks=v_ticks
         )
@@ -222,11 +225,11 @@ def velocityDistributionOverTimeCombined(
     cax = divider.append_axes("right", size="5%", pad=0.1)
     fig.colorbar(
         quad, cax=cax,
-        label=f"Distribution $\\langle f_{species.symbol()}\\rangle_x$ (a.u.)")
+        label=r"Distribution $\langle f_{s}\rangle_x$ (a.u.)")
     axes[1,0].set(
         ylim = (0,150),
         yticks = np.linspace(0, 140, 8),
-        ylabel="Time $t\\,\\omega_\\text{pp}$ (1)",
+        ylabel=r"Time $t\,\omega_\text{pp}$ (1)",
     )
 
     for ax_idx, (species, v_lim, v_ticks, ax) in enumerate(zip(
@@ -248,7 +251,7 @@ def velocityDistributionOverTimeCombined(
             transform=ax.transAxes,
         )
     axes[0,0].set(
-        ylabel=f"$\\langle f_{species.symbol()}\\rangle_x$ (a.u.)",
+        ylabel=r"$\langle f_{s}\rangle_x$ (a.u.)",
         yscale="log",
         ylim=(1e-3, None),
     )
@@ -277,6 +280,99 @@ def energyEFieldOverTime(
     plt.ylim(1e4, 1e7)
     if save:
         _saveFigure("e_field_energy-vs-time")
+
+def eFieldEvolutionCombined(filename: Path, info: RunInfo, save: bool=False):
+    filename = PARTICLE_VARIATION_FOLDER / "particles_8192/rep_0.h5"
+    with h5py.File(filename) as f:
+        time = f["Header/time"][:] * info.omega_pp
+        grid_edges = f["Grid/grid"][:]
+        ex = f["Electric Field/ex"][:]
+
+    grid_edges = grid_edges[0] / info.lambda_D
+
+    plt.style.use(MPLSTYLE_FILE)
+    fig, axes = plt.subplots(2, 1, figsize=(FIGURE_FULL_SIZE[0], 5.5), sharex=True)
+    axes: list[plt.Axes] = axes
+    quad = axes[0].pcolormesh(time, grid_edges, ex[:-1].T, cmap="bwr", rasterized=True,
+                vmin=-np.max(np.abs(ex)), vmax=np.max(np.abs(ex)))
+    divider = make_axes_locatable(axes[0])
+    cax = divider.append_axes('right', size='5%', pad=0.05)
+    fig.colorbar(quad, cax=cax, orientation='vertical', label="Electric field $E_x$ (V/m)")
+    axes[0].set(
+        # xlabel="Time $t\\,\\omega_\\text{pp}$ (1)"
+        ylabel="Position $x\\,/\\,\\lambda_\\text{D}$ (1)",
+        yticks=np.arange(5) * 32,
+        ylim=(0, np.max(grid_edges)),
+        xlim=(0, 150),
+        xticks=np.linspace(0, 150, 6),
+    )
+
+    with h5py.File(filename) as f:
+            time = f["Header/time"][:] * info.omega_pp
+            energy = f["Electric Field/ex"][:] ** 2
+    energy = np.mean(
+        energy,
+        axis=tuple(range(1, energy.ndim))
+    ) * (constants.epsilon_0 / 2) / (constants.electron_volt)
+    fit_result = analysis.fitGrowthRate(time, energy)
+
+    axes[1].plot(time, energy, label="$\\langle W_E\\rangle_x^\\text{sim}$",
+            color="black", lw=2)
+
+    lin_fit, fit_interval, poly_info = fit_result
+    axes[1].plot(
+            time[slice(*fit_interval)], energy[slice(*fit_interval)],
+            color="orange", lw=3, ls="solid", zorder=3,
+            label="Linear regime",
+    )
+    axes[1].plot(
+            time, np.exp(lin_fit.slope * time + lin_fit.intercept),
+            ls="--", color="royalblue", zorder=9, lw=1.5,
+            label="$W_{E}\\propto\\exp(2\\gamma\\,t)$",
+    )
+    poly, extrema, turn_p = poly_info
+    axes[1].plot(
+        time, np.exp(poly(time)), label="Polynomial fit",
+        color="gray", lw=1.5, ls=":", zorder=2, alpha=0.8
+    )
+    axes[1].plot(
+        extrema, np.exp(poly(extrema)), label="Turning points",
+        color="gray", zorder=3, ls="", alpha=0.8,
+        marker="o", markeredgecolor="black", markeredgewidth=1.5, markersize=10,
+    )
+    axes[1].plot(
+        turn_p, np.exp(poly(turn_p)), label="Inflection point",
+        color="white", zorder=3, ls="", marker="p",
+        markersize=10, markeredgecolor="black", markeredgewidth=1.5,
+    )
+    axes[1].set(
+        xlim=(0, 150),
+        ylim=(1e4, 1e7),
+        xticks=np.linspace(0.0, 150.0, num=6),
+        yscale="log",
+        xlabel="Time $t\\,\\omega_\\text{pp}$ (1)",
+        ylabel="Energy $\\langle W_E\\rangle_x$ (eV$\\,/\\,$m$^3$)",
+    )
+    axes[1].legend(columnspacing=1, labelspacing=0.4)
+    divider = make_axes_locatable(axes[1])
+    cax = divider.append_axes('right', size='5%', pad=0.05)
+    cax.set_axis_off()
+    axes[0].text(
+        0.05, 0.95, s="$\\mathbf{(a)}$",
+        horizontalalignment="left",
+        verticalalignment="top",
+        transform=axes[0].transAxes
+    )
+    axes[1].text(
+        0.05, 0.95, s="$\\mathbf{(b)}$",
+        horizontalalignment="left",
+        verticalalignment="top",
+        transform=axes[1].transAxes
+    )
+    fig.tight_layout(h_pad=0)
+    if save:
+        _saveFigure("e_field_evolution")
+
 
 def particleVariationTemperature3D(
     species: Species,
@@ -405,12 +501,12 @@ def particleVariationTemperatureXDiff(
     plt.figure(figsize=(FIGURE_HALF_SIZE[0],2.5))
     l_vary = plt.errorbar(particle_numbers, mean_T_diff, yerr=std_T_diff,
                 ls="", lw=1.5, color="white", ecolor="black",
-                marker="o", markersize=10, markeredgecolor="black", markeredgewidth=1.5)
+                marker="o", markeredgecolor="black", markeredgewidth=1.5)
     l_8192 = plt.plot(8192, p8192_T_diff,
         ls="", lw=1.5, color="white",
-        marker="p", markersize=10, markeredgecolor="black", markeredgewidth=1.5)[-1]
+        marker="p", markeredgecolor="black", markeredgewidth=1.5)[-1]
     plt.xscale("log", base=2)
-    plt.xlabel("Super particles $N_\\text{sim}\\,/\\,N_\\text{cell}$ (1)")
+    plt.xlabel("Pseudoparticles $N_\\text{sim}\\,/\\,N_\\text{cell}$ (1)")
     plt.ylabel(f"Temperature $\\Delta T_{{{species.symbol()},x}}$ (eV)")
     plt.legend([(l_vary, l_8192)],
                ["Simulation"],
@@ -480,9 +576,9 @@ def particleVariationWavenumber(
     with h5py.File(PARTICLE_VARIATION_FOLDER / "particles_0032/rep_0.h5") as f:
         grid = np.squeeze(f["/Grid/grid"])
 
-    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
-        p8192_time = f["Header/time"][:time.size]
-        p8192_E_field = f["Electric Field/ex"][:time.size]
+    with h5py.File(PARTICLE_VARIATION_FOLDER / "particles_8192/rep_0.h5") as f:
+        p8192_time = f["Header/time"][:]
+        p8192_E_field = f["Electric Field/ex"][:]
         p8192_grid = np.squeeze(f["Grid/grid"])
 
     # fix units of time and energy
@@ -492,13 +588,30 @@ def particleVariationWavenumber(
     p8192_grid /= info.lambda_D
     # extract particle numbers
     particle_numbers = np.array([int(pfs[0].stem[-4:]) for pfs in folders])
-    k, k_err = analysis.estimateFrequency(-1, grid, E_fields[...,:350,:], peak_cutoff=0.9)
+    k_arr = np.full(shape=E_fields.shape[:2], fill_value=np.nan)
+    k_err_arr = np.full_like(k_arr, fill_value=np.nan)
+
+    for p_idx, e_fields in enumerate(E_fields):
+        if p_idx < 2:
+            continue
+        for r_idx, field in enumerate(e_fields):
+            _, regime, _ = analysis.fitGrowthRate(
+                time, np.mean(field ** 2, axis=1), allowed_slope_deviation=0.5)
+            k_arr[p_idx, r_idx], k_err_arr[p_idx, r_idx] = analysis.estimateFrequency(
+                -1, grid, field[:(regime[-1])]
+            )
+    _, regime, _ = analysis.fitGrowthRate(
+        p8192_time, np.mean(p8192_E_field ** 2, axis=1)
+    )
     p8192_k, p8192_k_err = analysis.estimateFrequency(
-        -1, p8192_grid, p8192_E_field[...,:350,:], peak_cutoff=0.9
+        -1, p8192_grid, p8192_E_field[:regime[-1]]
     )
 
-    mean_k = np.mean(k, axis=1)
-    mean_k_err = np.full_like(mean_k, k_err) / np.sqrt(k.shape[1])
+    mean_k = np.mean(k_arr, axis=-1)
+    mean_k_err = np.sqrt(np.sum((k_err_arr / 4) ** 2, axis=-1) + np.var(k_arr, axis=-1) / 4)
+    print(np.std(k_arr, axis=-1))
+    p8192_k_err = np.sqrt(p8192_k_err ** 2 + np.mean(np.var(k_arr, axis=1)[-2:]))
+
     plt.style.use(MPLSTYLE_FILE)
     plt.figure(figsize=FIGURE_HALF_SIZE)
     l_vary = plt.errorbar(particle_numbers[2:], mean_k[2:], yerr=mean_k_err[2:],
@@ -507,8 +620,9 @@ def particleVariationWavenumber(
     l_8192 = plt.errorbar(8192, p8192_k, yerr=p8192_k_err,
         ls="", lw=1.5, color="white", ecolor="black",
         marker="p", markeredgecolor="black", markeredgewidth=1.5)
-    l_theory = plt.axhline(theory.waveNumber(1e-1, info), color="black", ls=":")
-    plt.ylim(0.35, 0.7)
+
+    l_theory = plt.axhline(0.6604529941471382, color="black", ls=":")
+    plt.ylim(0.15, 0.75)
     y_min, y_max = plt.gca().get_ylim()
     r_fail = plt.fill_between(
         [0, 2 ** 6.5], y1=y_min, y2=y_max,
@@ -518,8 +632,8 @@ def particleVariationWavenumber(
     plt.xlim(0.5 * particle_numbers[0], 2 ** 14)
     plt.xticks(2 ** np.linspace(4, 14, 6))
     plt.ylim(y_min, y_max)
-    plt.yticks(np.linspace(0.4, 0.7, num=4))
-    plt.xlabel("Super particles $N_\\text{sim}\\,/\\,N_\\text{cell}$ (1)")
+    plt.yticks(np.linspace(0.2, 0.7, num=6))
+    plt.xlabel("Pseudoparticles $N_\\text{sim}\\,/\\,N_\\text{cell}$ (1)")
     plt.ylabel("Wave number $k_\\text{max}\\,\\lambda_\\text{D}$ (1)")
     plt.legend([l_theory, (l_vary, l_8192), r_fail],
                ["Theory", "Simulation", "No wave"],
@@ -537,7 +651,7 @@ def particleVariationFrequency(
         dataset_names=["/Electric Field/ex"],
         recursive=True
     )
-    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
+    with h5py.File(PARTICLE_VARIATION_FOLDER / "particles_8192/rep_0.h5") as f:
         p8192_time = f["Header/time"][:]
         p8192_E_field = f["Electric Field/ex"][:]
 
@@ -546,12 +660,28 @@ def particleVariationFrequency(
     p8192_time *= info.omega_pp
     # extract particle numbers
     particle_numbers = np.array([int(pfs[0].stem[-4:]) for pfs in folders])
+    omega_arr = np.full(shape=E_fields.shape[:2], fill_value=np.nan)
+    omega_err_arr = np.full_like(omega_arr, fill_value=np.nan)
 
-    omega, omega_err = analysis.estimateFrequency(-2, time, E_fields[...,:350,:])
-    p8192_omega, p8192_omega_err = analysis.estimateFrequency(-2, p8192_time, p8192_E_field[...,:350,:])
-    mean_omega = np.mean(omega, axis=1)
-    mean_omega_err = np.full_like(mean_omega, omega_err / np.sqrt(omega.shape[1]))
-    # mean_omega_err[mean_omega_err < omega_err] = omega_err
+    for p_idx, e_fields in enumerate(E_fields):
+        if p_idx < 2:
+            continue
+        for r_idx, field in enumerate(e_fields):
+            _, regime, _ = analysis.fitGrowthRate(
+                time, np.mean(field ** 2, axis=1), allowed_slope_deviation=0.5
+            )
+            omega_arr[p_idx, r_idx], omega_err_arr[p_idx, r_idx] = analysis.estimateFrequency(
+                -2, time, field[:(regime[-1])]
+            )
+    _, regime, _ = analysis.fitGrowthRate(
+        p8192_time, np.mean(p8192_E_field ** 2, axis=1)
+    )
+    p8192_omega, p8192_omega_err = analysis.estimateFrequency(
+        -2, p8192_time, p8192_E_field[:regime[-1]]
+    )
+    mean_omega = np.mean(omega_arr, axis=1)
+    mean_omega_err = np.sqrt(np.sum((omega_err_arr / 4) ** 2, axis=1) + np.var(omega_arr, axis=1) / 4)
+    p8192_omega_err = np.sqrt(p8192_omega_err ** 2 + np.mean(np.var(omega_arr, axis=1)[-2:]))
     colors = cmaps.devon.discrete(3).colors
     plt.style.use(MPLSTYLE_FILE)
     plt.figure(figsize=FIGURE_HALF_SIZE)
@@ -562,8 +692,11 @@ def particleVariationFrequency(
         ls="", marker="p", color=colors[2], lw=1.5,
         markeredgecolor="black", ecolor="black", markeredgewidth=1.5)
 
-    l_theory = plt.axhline(theory.waveFrequency(1e-1), color="black", ls=":")
-    plt.ylim(0.4, 0.8)
+    with h5py.File(THEORY_U_ALPHA_FILE) as f:
+        u_alpha = f["u_alpha_bulk"][:] * 1e-3
+        omega = f["omega_max"][:] / info.omega_pp
+    l_theory = plt.axhline(omega[np.argmin(np.abs(u_alpha - 100))], color="black", ls=":")
+    plt.ylim(0.7, 0.95)
     y_min, y_max = plt.gca().get_ylim()
     r_fail = plt.fill_between(
         [0, 2 ** 6.5],
@@ -573,12 +706,12 @@ def particleVariationFrequency(
     plt.xscale("log", base=2)
     plt.xlim(0.5 * particle_numbers[0], 2 ** 14)
     plt.xticks(2 ** np.linspace(4, 14, 6))
-    plt.yticks(np.linspace(0.4, 0.8, num=5))
-    plt.xlabel("Super particles $N_\\text{sim}\\,/\\,N_\\text{cell}$ (1)")
+    plt.yticks(np.linspace(0.7, 0.9, num=3))
+    plt.xlabel("Pseudoparticles $N_\\text{sim}\\,/\\,N_\\text{cell}$ (1)")
     plt.ylabel("Frequency $\\omega_\\text{max}\\,/\\,\\omega_\\text{pp}$ (1)")
     plt.legend([l_theory, (l_vary, l_8192), r_fail],
                ["Theory", "Simulation", "No wave"],
-               loc=(0.2535, 0.08), markerscale=0.7, framealpha=0.6,
+               loc="upper left", markerscale=0.7, framealpha=0.6,
                handler_map={tuple: matplotlib.legend_handler.HandlerTuple(ndivide=None)})
     if save:
         _saveFigure("frequency-vs-num_particles", "particles_per_cell")
@@ -607,25 +740,38 @@ def particleVariationGrowthRate(
     # extract growth rates from fits
     fits = [[analysis.fitGrowthRate(time, W_E) for W_E in es] for es in energies]
     p8192_growth_rate = analysis.fitGrowthRate(p8192_time, p8192_energy)[0].slope / 2
+    p8192_growth_rate_err = np.abs(
+        analysis.fitGrowthRate(p8192_time, p8192_energy, allowed_slope_deviation=0.4)[0].slope -
+        analysis.fitGrowthRate(p8192_time, p8192_energy, allowed_slope_deviation=0.1)[0].slope
+    ) / 2
+    growth_rates = np.full(energies.shape[:2], np.nan)
+    growth_rate_errs = np.full_like(growth_rates, np.nan)
+    for p_idx, es in enumerate(energies):
+        for r_idx, W_E in enumerate(es):
+            res = analysis.fitGrowthRate(time, W_E)
+            res_small = analysis.fitGrowthRate(time, W_E, allowed_slope_deviation=0.1)
+            res_big = analysis.fitGrowthRate(time, W_E, allowed_slope_deviation=0.4)
+            if None not in [res, res_small, res_big]:
+                growth_rates[p_idx,r_idx] = res[0].slope / 2
+                growth_rate_errs[p_idx,r_idx] = np.abs(res_small[0].slope - res_big[0].slope) / 2
 
-    growth_rates = [[res[0].slope / 2 for res in fs if res is not None] for fs in fits]
-    growth_rates_mean = np.array([np.mean(x) if len(x) == 4 else np.nan for x in growth_rates])
-    growth_rates_std  = np.array([np.std(x)  if len(x) == 4 else np.nan for x in growth_rates])
-
+    growth_rates_mean = np.mean(growth_rates, axis=1)
+    growth_rates_err  = np.sqrt(np.sum((growth_rate_errs / 4) ** 2, axis=1) + np.var(growth_rates, axis=1) / 4)
+    p8192_growth_rate_err = np.sqrt(p8192_growth_rate_err ** 2 + np.mean(np.var(growth_rates, axis=1)[-2:]))
     plt.style.use(MPLSTYLE_FILE)
     plt.figure(figsize=FIGURE_HALF_SIZE)
     l_vary = plt.errorbar(
-        particle_numbers, growth_rates_mean, yerr=growth_rates_std,
+        particle_numbers, growth_rates_mean, yerr=growth_rates_err,
         ls="", lw=1.5, ecolor="black", color="white",
         marker="o", markersize=10, markeredgecolor="black", markeredgewidth=1.5,
     )
-    l_8192 = plt.plot(
-        8192, p8192_growth_rate,
+    l_8192 = plt.errorbar(
+        8192, p8192_growth_rate, yerr=p8192_growth_rate_err,
         ls="", lw=1.5, color="white",
         marker="p", markersize=10, markeredgecolor="black", markeredgewidth=1.5
-    )[-1]
+    )
     l_theory = plt.axhline(theory.growthRate(1e-1), color="black", ls=":")
-    plt.ylim(1e-2, 12e-2)
+    plt.ylim(1e-2, 13e-2)
     y_min, y_max = plt.gca().get_ylim()
     r_fail = plt.fill_between(
         [0, 2 ** 6.5], y1=y_min, y2=y_max,
@@ -635,7 +781,7 @@ def particleVariationGrowthRate(
     plt.xlim(0.5 * particle_numbers[0], 2 ** 14)
     plt.xticks(2 ** np.linspace(4, 14, 6))
     plt.yticks(np.linspace(0.3e-1, 1.2e-1, 4))
-    plt.xlabel("Super particles $N_\\text{sim}\\,/\\,N_\\text{cell}$ (1)")
+    plt.xlabel("Pseudoparticles $N_\\text{sim}\\,/\\,N_\\text{cell}$ (1)")
     plt.ylabel("Growth rate $\\gamma\\,/\\,\\omega_\\text{pp}$ (1)")
     plt.legend([l_theory, (l_vary, l_8192), r_fail],
                ["Theory $\\gamma_\\text{max}\\,/\\,\\omega_\\text{pp}$", "Simulation", "No wave"],
@@ -646,7 +792,7 @@ def particleVariationGrowthRate(
 
 def linearTheoryDensityRatio(info: RunInfo, save: bool=False):
     import theory
-    with h5py.File("theory_density_ratio.h5") as f:
+    with h5py.File(THEORY_DENSITY_RATIO_FILE) as f:
         na_np = f["na_np_ratio"][:]
         n_p = info.electron.number_density / (2 * na_np + 1)
         omega_pp = physics.plasmaFrequency(
@@ -671,13 +817,13 @@ def linearTheoryDensityRatio(info: RunInfo, save: bool=False):
         generalSaveFigure("linear_theory-density_ratio")
 
 def linearTheoryFlowVelocity(info: RunInfo, save: bool=False):
-    with h5py.File("theory_u_alpha_dispersion.h5") as f:
+    with h5py.File(THEORY_U_ALPHA_FILE) as f:
         u_alpha = f["u_alpha_bulk"][:] * 1e-3
         gamma = f["gamma_max"][:] / info.omega_pp
         theta = f["theta_max"][:] * 180 / np.pi
         k_vec = f["k_max"][:] * info.lambda_D
         omega = f["omega_max"][:] / info.omega_pp
-
+    print(u_alpha[0], np.mean((omega/k_vec * info.omega_pp*info.lambda_D)[-10:]), np.sqrt(3/2)*info.alpha.v_thermal)
     plt.style.use(MPLSTYLE_FILE)
     plt.figure(figsize=FIGURE_FULL_SIZE)
     plt.plot(
@@ -727,10 +873,10 @@ def linearTheoryWaveProperties(info: RunInfo, save: bool=False):
     )
     axes[0].legend(labelspacing=0.4, loc=(0.05, 0.15))
 
-    with h5py.File("theory_u_alpha_dispersion.h5") as f:
+    with h5py.File(THEORY_U_ALPHA_FILE) as f:
         u_alpha = f["u_alpha_bulk"][:] * 1e-3
         gamma = f["gamma_max"][:] / info.omega_pp
-        theta = f["theta_max"][:] * 180 / np.pi
+        theta = f["theta_max"][:]
         k_vec = f["k_max"][:] * info.lambda_D
         omega = f["omega_max"][:] / info.omega_pp
 
@@ -744,19 +890,33 @@ def linearTheoryWaveProperties(info: RunInfo, save: bool=False):
         u_alpha, k_vec, color="black",
         label="$k_\\text{max}\\,\\lambda_\\text{D}$")
     axes[1].plot(
-        u_alpha, theta * np.pi / 180,
+        u_alpha, theta,
         label="$\\theta_\\text{max}$",
-        color="orange", ls="-."
+        color="orange", ls="-.", lw=2,
     )
-    # magic = np.arccos((omega / k_vec * info.omega_pp * info.lambda_D + 30_000) / (u_alpha * 1e3))
-    # print(magic)
-    # axes[1].plot(u_alpha, magic, color="black")
+    v_ph_magic = (omega / k_vec)[u_alpha>100] * info.omega_pp * info.lambda_D
+    popt, _ = optimize.curve_fit(
+        lambda v, d: (np.mean(v_ph_magic) + d) / v,
+        xdata=u_alpha[u_alpha>100] * 1e3,
+        ydata=np.cos(theta[u_alpha>100]), p0=[np.sqrt(np.pi/2) * info.alpha.v_thermal]
+    )
+    magic = np.arccos(
+        (np.mean(v_ph_magic) + popt[0]) / (u_alpha * 1e3),
+        out=np.zeros_like(omega),
+        where=(np.mean(v_ph_magic) + popt[0]) / (u_alpha * 1e3) < 1
+    )
+    print(np.nansum((magic - theta) ** 2) / np.nansum((theta - np.nanmean(theta)) ** 2))
+    axes[1].plot(
+        u_alpha, magic, color="#bb0000", ls=(0,(1,1,1,5)),
+        label=r"$\theta_\text{max}^\text{geom}$",
+        lw=1.5
+    )
     axes[1].set(
         xlim=(55, 200),
         xlabel="Flow velocity $u_\\alpha^{t=0}$ (km$\\,/\\,$s)",
         # ylabel="Wave properties (1)",
     )
-    axes[1].legend(loc=(0.48, 0.18), labelspacing=0.4)
+    axes[1].legend(loc=(0.48, 0.03), labelspacing=0.4, framealpha=0.6)
     axes[0].text(
         0.05, 0.95, s="$\\mathbf{(a)}$",
         horizontalalignment="left",
@@ -773,24 +933,43 @@ def linearTheoryWaveProperties(info: RunInfo, save: bool=False):
     if save:
         generalSaveFigure("linear_theory-wave_properties")
 
-def illustrateVelocitySpace(info: RunInfo, save: bool=False):
+def illustrateVelocitySpace(info: RunInfo, u_alpha: float|None=None, save: bool=False):
     v_ph = 69
     v_th = np.sqrt(3/2) * info.alpha.v_thermal * 1e-3
-    u_alpha = 120
-    theta = np.arccos((v_ph + v_th) / u_alpha, out=np.array(0.0), where=v_ph / (u_alpha - v_th) < 1)
+    u_crit = v_ph + v_th
+    if u_alpha is None:
+        u_alpha = u_crit
+    assert u_alpha >= u_crit, "negative not supported"
+    theta = np.arccos(u_crit / u_alpha, out=np.array(0.0), where=v_ph / (u_alpha - v_th) < 1)
     # phase velocity circle and gradient circle
     alpha = np.linspace(0, 2 * np.pi, num=100)
     plt.style.use(MPLSTYLE_FILE)
     plt.figure(figsize=FIGURE_FULL_SIZE)
-    plt.plot(v_ph * np.sin(alpha), v_ph * np.cos(alpha), ls=":", lw=2, label="$\\mathbf{v}\\cdot\\mathbf{v}_\\text{ph}=v_\\text{ph}^2$", color="#000000")
-    plt.plot(u_alpha + v_th * np.sin(alpha), v_th * np.cos(alpha), ls=(0, (3,1,1,1)), lw=2, label="$\\mathbf{v}\\cdot\\mathbf{u}_\\alpha=v_{\\text{th},\\alpha}^2$", color="#2C2CEA")
+    plt.plot(
+        v_ph * np.sin(alpha), v_ph * np.cos(alpha), ls=":", lw=2,
+        label="$\\mathbf{v}\\cdot\\mathbf{v}_\\text{ph}=v_\\text{ph}^2$", color="#000000"
+    )
+    plt.plot(
+        u_alpha + v_th * np.sin(alpha), v_th * np.cos(alpha), ls=(0, (3,1,1,1)), lw=2,
+        label="$\\mathbf{v}\\cdot\\mathbf{u}_\\alpha=v_{\\text{r}\\alpha}^2$", color="#2C2CEA"
+    )
     alpha = np.linspace(-theta, theta)
     plt.plot(0.5 * v_ph * np.cos(alpha), 0.5 * v_ph * np.sin(alpha), color="black", ls="-", lw=1.5)
-    plt.text(
-        v_ph / 4, 0, s=r"$2\theta$",
-        horizontalalignment="left",
-        verticalalignment="center",
-    )
+    if u_alpha > u_crit:
+        plt.text(
+            v_ph / 6, 0,
+            s=r"$2\theta_\text{max}$",
+            horizontalalignment="left",
+            verticalalignment="center",
+        )
+    else:
+        plt.text(
+            v_ph / 6, v_ph / 8,
+            s=r"$\theta_\text{max}=0$",
+            horizontalalignment="left",
+            verticalalignment="center",
+        )
+
     # proton and alpha max
     plt.plot(0,0, ls="", marker="o", color="black", label="$\\langle f_\\text{p}\\rangle$")
     plt.plot(u_alpha, 0, ls="", marker="p", color="#2C2CEA", label="$\\langle f_\\alpha\\rangle$")
@@ -801,11 +980,12 @@ def illustrateVelocitySpace(info: RunInfo, save: bool=False):
         v_ph * np.sin(theta) - np.cos(theta) * s,
         ls="--", color="#900000"
     )
-    plt.plot(
-        +v_ph * np.cos(theta) + np.sin(theta) * s,
-        -v_ph * np.sin(theta) + np.cos(theta) * s,
-        ls="--", color="#900000"
-    )
+    if u_alpha > u_crit:
+        plt.plot(
+            +v_ph * np.cos(theta) + np.sin(theta) * s,
+            -v_ph * np.sin(theta) + np.cos(theta) * s,
+            ls="--", color="#900000"
+        )
     # interaction regions
     width = 40
     rect_pos = plt.Rectangle(
@@ -815,23 +995,29 @@ def illustrateVelocitySpace(info: RunInfo, save: bool=False):
         ),
         width=1000, height=width, angle=theta * 180 / np.pi+270, edgecolor="black", zorder=1, facecolor="#dc7800", alpha=0.7
     )
-    rect_neg = plt.Rectangle(
-        xy=(
-            +(v_ph + width / 2) * np.cos(theta) + np.sin(theta) * (-2 * v_ph),
-            -(v_ph + width / 2) * np.sin(theta) + np.cos(theta) * (-2 * v_ph)
-        ),
-        width=1000, height=width, angle=-theta * 180 / np.pi+90, edgecolor="black", zorder=1, facecolor="#dc7800", alpha=0.7
-    )
+    if u_alpha > u_crit:
+        rect_neg = plt.Rectangle(
+            xy=(
+                +(v_ph + width / 2) * np.cos(theta) + np.sin(theta) * (-2 * v_ph),
+                -(v_ph + width / 2) * np.sin(theta) + np.cos(theta) * (-2 * v_ph)
+            ),
+            width=1000, height=width, angle=-theta * 180 / np.pi+90, edgecolor="black", zorder=1, facecolor="#dc7800", alpha=0.7
+        )
+    # arrows (v_ph)
     ann = plt.annotate(
         text='', xy=((v_ph + 3) * np.cos(theta), (v_ph + 3) * np.sin(theta)),
         xytext=(0,0), arrowprops=dict(arrowstyle='->', lw=2)
     )
-    ann = plt.annotate(
-        text='', xy=((v_ph + 3) * np.cos(theta), -(v_ph + 3) * np.sin(theta)),
-        xytext=(0,0), arrowprops=dict(arrowstyle='->', lw=2)
-    )
-
-    delta = 120
+    if u_alpha > u_crit:
+        ann = plt.annotate(
+            text='', xy=((v_ph + 3) * np.cos(theta), -(v_ph + 3) * np.sin(theta)),
+            xytext=(0,0), arrowprops=dict(arrowstyle='->', lw=2)
+        )
+    # arrows (interaction)
+    if u_alpha > u_crit:
+        delta = 120
+    else:
+        delta = 60
     ann = plt.annotate(
         text='', xy=(
             (v_ph - width/2 - 3) * np.cos(theta) + np.sin(theta) * delta,
@@ -853,18 +1039,20 @@ def illustrateVelocitySpace(info: RunInfo, save: bool=False):
         ), arrowprops=dict(arrowstyle='<->', lw=2, color="#693a00")
     )
     plt.text(
-        0.02, 0.97, s=r"$u_\alpha = v_\text{ph} + v_{\text{th},\alpha}$",
+        0.02, 0.97,
+        s=rf"$u_\alpha {'=' if u_alpha == u_crit else '>'} v_\text{{ph}} + v_{{\text{{r}}\alpha}}$",
         horizontalalignment="left",
         verticalalignment="top",
         transform=plt.gca().transAxes,
     )
     plt.gca().add_patch(rect_pos)
-    plt.gca().add_patch(rect_neg)
+    if u_alpha > u_crit:
+        plt.gca().add_patch(rect_neg)
     plt.gca().set_aspect("equal")
     plt.xlim(-80, 160)
     plt.ylim(-80, 80)
-    plt.xlabel(r"Velocity $v_x/v_\text{ph}$")
-    plt.ylabel(r"Velocity $v_y/v_\text{ph}$")
+    plt.xlabel(r"Velocity $v_x\,/\,v_\text{ph}$")
+    plt.ylabel(r"Velocity $v_y\,/\,v_\text{ph}$")
     plt.xticks([-v_ph, 0, v_ph, 2*v_ph], ["-1", "0", "1", "2"])
     plt.yticks([-v_ph, 0, v_ph], ["-1", "0", "1"])
     [h, l] = plt.gca().get_legend_handles_labels()
@@ -874,9 +1062,9 @@ def illustrateVelocitySpace(info: RunInfo, save: bool=False):
             plt.scatter(1e3, 1e3, c='#693a00', marker='$⟷$', s=300)
         ])[i] for i in (0,1,4,2,3,5)],
         [(l+["$\\mathbf{v}_\\text{ph}$", r"$\partial f_s\,/\,\partial t$"])[i] for i in (0,1,4,2,3,5)],
-        ncols=2, labelspacing=0.0, loc="lower left", columnspacing=0.5)
+        ncols=2, labelspacing=0.2, loc="lower left", columnspacing=0.5, borderaxespad=0.8)
     if save:
-        generalSaveFigure("velocity_space-illustration")
+        generalSaveFigure(f"velocity_space{'_crit' if u_alpha == u_crit else ''}-illustration")
 
 def illustrateSimulationGrid(save: bool=False):
     rng = np.random.default_rng(2)
@@ -921,3 +1109,328 @@ def illustrateSimulationGrid(save: bool=False):
     plt.gca().set_aspect("equal")
     if save:
         generalSaveFigure("simulation_grid-illustration")
+
+def runInfoForDenistyRatio(ratio):
+    n_electron = 12e6
+    n_proton = n_electron / (1 + 2 * ratio)
+    n_alpha = ratio * n_proton
+    return RunInfo(
+        electron=SpeciesInfo(
+            number_density=12.0e6,
+            temperature=100.0,
+            charge=-1,
+            mass=1.0,
+            bulk_velocity=0.0
+        ),
+        proton=SpeciesInfo(
+            number_density=n_proton,
+            temperature=3.0,
+            charge=+1,
+            mass=1836.152674,
+            bulk_velocity=0.0
+        ),
+        alpha=SpeciesInfo(
+            number_density=n_alpha,
+            temperature=12.0,
+            charge=+2,
+            mass=7294.29953,
+            bulk_velocity=1.0e5
+        )
+    )
+
+def heatingVsDensityRatio(species: Species, save: bool=False):
+    density_ratios = []
+    temperature = []
+    std_temperature = []
+
+    for filename in sorted(DENSITY_VARIATION_FOLDER.glob("*.h5")):
+        ratio = 10 ** float(filename.stem[-5:])
+        info = runInfoForDenistyRatio(ratio)
+        with h5py.File(filename) as f:
+            time = f[f"Header/time"][1:] * info.omega_pp
+            x_grid = f[f"Grid/x_px/{species.value}/X"][1:]
+            px_grid = f[f"Grid/x_px/{species.value}/Px"][1:]
+            temp_x = np.mean(f[f"dist_fn/x_px/{species.value}"][1:], axis=1)
+            energy = f["Electric Field/ex"][1:] ** 2
+        energy = np.mean(
+            energy,
+            axis=tuple(range(1, energy.ndim))
+        ) * (constants.epsilon_0 / 2) / (constants.electron_volt)
+        fit_result = analysis.fitGrowthRate(time, energy, allowed_slope_deviation=0.1)
+        # take the same amount of time after the linear regime for each record
+        last_idx = (fit_result[1][1] + 880)
+        info = runInfoForDenistyRatio(ratio)
+        temp = analysis.temperature1D(x_grid[:last_idx], px_grid[:last_idx], temp_x[:last_idx], info[species])
+        T_init = np.mean(temp[:10], axis=-1)
+        T_final = np.mean(temp[-10:], axis=-1)
+        T_diff = T_final - T_init
+        std_T_diff = (np.std(temp[:10], axis=-1) + np.std(temp[-10:], axis=-1)) / 2
+        density_ratios.append(ratio)
+        temperature.append(T_diff)
+        std_temperature.append(std_T_diff)
+
+    temperature = np.array(temperature)
+    density_ratios = np.array(density_ratios)
+    std_temperature = np.array(std_temperature)
+
+    plt.style.use(MPLSTYLE_FILE)
+    plt.figure(figsize=(FIGURE_HALF_SIZE[0],2.5))
+    plt.errorbar(density_ratios, temperature, yerr=std_temperature,
+                ls="", lw=1.5, color="white", ecolor="black",
+                marker="o", markersize=8, markeredgecolor="black", markeredgewidth=1.5)
+    plt.gca().set(
+        xscale="log",
+        xlabel=r"Density ratio $n_\alpha\,/\,n_\text{p}$ (1)",
+        ylabel=f"Temperature $\\Delta T_{{{species.symbol()},x}}$ (eV)",
+        xlim=(1e-2, 1e0),
+    )
+    if save:
+        _saveFigure(f"heating-vs-density_ratio-{species.value}", "density_ratio_variation")
+
+def wavenumberVsDensityRatio(save: bool=False):
+    density_ratios = []
+    k = []
+    k_err = []
+    for filename in sorted(DENSITY_VARIATION_FOLDER.glob("*.h5")):
+        ratio = 10 ** float(filename.stem[-5:])
+        if ratio >= 1e-1: continue
+        density_ratios.append(ratio)
+        info = runInfoForDenistyRatio(ratio)
+        with h5py.File(filename) as f:
+            time = f["Header/time"][:]
+            grid = np.squeeze(f["Grid/grid"])[0]
+            e_field = f["Electric Field/ex"][:]
+
+        # fix units of time and energy
+        time *= info.omega_pp
+        grid /= info.lambda_D
+        # extract particle numbers
+        res = analysis.fitGrowthRate(
+            time,
+            np.mean(e_field ** 2, axis=1) * constants.epsilon_0 / (2.0 * constants.electron_volt),
+            allowed_slope_deviation=0.5
+        )
+        if res is None:
+            print(ratio)
+        _, regime, _ = res
+        print(regime[-1])
+        k_single, k_err_single = analysis.estimateFrequency(
+            -1, grid, e_field[regime[0]-100:regime[0]],
+        )
+        k.append(k_single) # res[0].slope/2
+        k_err.append(k_err_single)
+
+    plt.style.use(MPLSTYLE_FILE)
+    plt.figure(figsize=FIGURE_HALF_SIZE)
+    plt.errorbar(density_ratios, k, label="Simulation", # yerr=k_err,
+        ls="", lw=1.5, marker="o", color="white", ecolor="black",
+        markeredgecolor="black", markeredgewidth=1.5,
+    )
+
+    with h5py.File(THEORY_DENSITY_RATIO_FILE) as f:
+        theory_k_max = f['k_max'][:]
+        # theory_gamma_max = f['gamma_max'][:]
+        theory_ratio = f['na_np_ratio'][:]
+    # theory_gamma_max = np.array([k / runInfoForDenistyRatio(ratio).omega_pp for k, ratio in zip(theory_gamma_max, theory_ratio)])
+    theory_k_max = np.array([k * runInfoForDenistyRatio(ratio).lambda_D for k, ratio in zip(theory_k_max, theory_ratio)])
+    plt.plot(theory_ratio, theory_k_max, label="Theory")
+    # plt.plot(theory_ratio, theory_gamma_max, label="Theory")
+
+    plt.xscale("log")
+    plt.xlabel(r"Density ratio $n_\alpha\,/\,n_\text{p}$ (1)")
+    plt.ylabel(r"Wave number $k_\text{max}\,\lambda_\text{D}$ (1)")
+    plt.legend()
+    if save:
+        _saveFigure(f"wavenumber-vs-density_ratio", "density_ratio_variation")
+
+def frequencyVsDensityRatio(save: bool=False):
+    density_ratios = []
+    omega = []
+    omega_err = []
+    for filename in sorted(DENSITY_VARIATION_FOLDER.glob("*.h5")):
+        ratio = 10 ** float(filename.stem[-5:])
+        if ratio >= 1e-1: continue
+        density_ratios.append(ratio)
+        info = runInfoForDenistyRatio(ratio)
+        with h5py.File(filename) as f:
+            time = f["Header/time"][:]
+            grid = np.squeeze(f["Grid/grid"])
+            e_field = f["Electric Field/ex"][:]
+
+        # fix units of time and energy
+        time *= info.omega_pp
+        grid /= info.lambda_D
+        # extract particle numbers
+        _, regime, _ = analysis.fitGrowthRate(
+            time,
+            np.mean(e_field ** 2, axis=1) * constants.epsilon_0 / (2.0 * constants.electron_volt),
+            allowed_slope_deviation=0.5
+        )
+        print(time[regime[-1]], filename.stem[-5:])
+        E_field = e_field[:regime[-1]]
+        omega_single, omega_err_single = analysis.estimateFrequency(
+            -2, time, E_field,
+        )
+        f, p = signal.periodogram(E_field, axis=-2, fs=1/(time[1] - time[0]))
+        p_mean = np.mean(p, axis=1)
+        f *= 2 * np.pi
+        def lorentzian( x, x0, gam, a, b):
+            return a * gam**2 / ( gam**2 + ( x - x0 )**2) + b
+
+        popt, pcov = optimize.curve_fit(
+            lambda x, x0, gam, a, b: np.log(lorentzian(x, x0, gam, a, b)),
+            f[f<np.pi][1:], np.log(p_mean[f<np.pi][1:]),
+            p0=[f[1:][np.argmax(p_mean[1:])], 0.05, np.max(p_mean[1:]), 0])
+
+        omega.append(omega_single)
+        omega_err.append(omega_err_single)
+
+    plt.style.use(MPLSTYLE_FILE)
+    plt.figure(figsize=FIGURE_HALF_SIZE)
+    plt.errorbar(density_ratios, omega, yerr=omega_err, label="Simulation",
+        ls="", lw=1.5, marker="o", color="white", ecolor="black",
+        markeredgecolor="black", markeredgewidth=1.5,
+    )
+
+    with h5py.File(THEORY_DENSITY_RATIO_FILE) as f:
+        theory_omega_max = f['omega_max'][:]
+        theory_ratio = f['na_np_ratio'][:]
+    theory_omega_max = np.array([w / runInfoForDenistyRatio(ratio).omega_pp for w, ratio in zip(theory_omega_max, theory_ratio)])
+    plt.plot(theory_ratio, theory_omega_max, label="Theory")
+
+    plt.xscale("log")
+    plt.xlabel(r"Density ratio $n_\alpha\,/\,n_\text{p}$ (1)")
+    plt.ylabel(r"Wave frequency $\omega_\text{max}\,/\,\omega_\text{pp}$ (1)")
+    plt.legend()
+    if save:
+        _saveFigure(f"frequency-vs-density_ratio", "density_ratio_variation")
+
+def electricFieldDensityRatio(filename, save: bool=False):
+    ratio = 10 ** float(filename.stem[-5:])
+    info = runInfoForDenistyRatio(ratio)
+    with h5py.File(filename) as f:
+        time = f["Header/time"][:] * info.omega_pp
+        grid_edges = np.squeeze(f["Grid/grid"][:])
+        ex = f["Electric Field/ex"][:]
+
+    grid_edges = grid_edges[0] / info.lambda_D
+
+    plt.style.use(MPLSTYLE_FILE)
+    plt.figure(figsize=(FIGURE_FULL_SIZE[0], 2.6))
+    plt.pcolormesh(time, grid_edges, ex[:-1].T, cmap="bwr", rasterized=True,
+                   vmin=-np.max(np.abs(ex)), vmax=np.max(np.abs(ex)))
+    plt.colorbar(label=r"Electric field $E_x$ (V$\,/\,$m)")
+    plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
+    plt.ylabel("Position $x\\,/\\,\\lambda_\\text{D}$ (1)")
+    plt.gca().set(
+        xlim=(0, 150),
+        xticks=np.arange(0, 151, 30),
+        ylim=(0, 64),
+        yticks=np.arange(0, 65, 16),
+    )
+    if save:
+        _saveFigure(f"electric_field-density_ratio_{filename.stem[-5:]}", "density_ratio_variation")
+
+def linearRegimeDensityRatio(save: bool=False):
+    plt.style.use(MPLSTYLE_FILE)
+    plt.figure(figsize=FIGURE_HALF_SIZE)
+    for filename in sorted(DENSITY_VARIATION_FOLDER.glob("density_*.h5")):
+        ratio = 10 ** float(filename.stem.split("_")[-1])
+        info = runInfoForDenistyRatio(ratio)
+        with h5py.File(filename) as f:
+            time = f["Header/time"][:] * info.omega_pp
+            energy = f["Electric Field/ex"][:] ** 2
+        energy = np.mean(
+            energy,
+            axis=tuple(range(1, energy.ndim))
+        ) * (constants.epsilon_0 / 2) / (constants.electron_volt)
+        fit_result = analysis.fitGrowthRate(time, energy, allowed_slope_deviation=0.1, reverse_search_direction=True)
+        plt.plot(
+            [ratio, ratio], time[fit_result[1]],
+            marker="p", color="black", ls=":",
+            markerfacecolor="white", markeredgecolor="black", markeredgewidth=1)
+    plt.xscale("log")
+    plt.xlim(1e-2, 1e0)
+    plt.xlabel(r"Density ratio $n_\alpha\,/\,n_\text{p}$")
+    plt.ylabel(r"Linear regime $t\,\omega_\text{pp}$ (1)")
+    if save:
+        _saveFigure(f"linear_regime-vs-density_ratio", "density_ratio_variation")
+
+def growthRateDensityRatio(save: bool=False):
+    density_ratios = []
+    gamma = []
+    for filename in sorted(DENSITY_VARIATION_FOLDER.glob("*.h5")):
+        ratio = 10 ** float(filename.stem[-5:])
+        density_ratios.append(ratio)
+        info = runInfoForDenistyRatio(ratio)
+        with h5py.File(filename) as f:
+            time = f["Header/time"][:]
+            grid = np.squeeze(f["Grid/grid"])[0]
+            e_field = f["Electric Field/ex"][:]
+        # fix units of time and energy
+        time *= info.omega_pp
+        grid /= info.lambda_D
+        # extract particle numbers
+        res = analysis.fitGrowthRate(
+            time,
+            np.mean(e_field ** 2, axis=1) * constants.epsilon_0 / (2.0 * constants.electron_volt),
+            allowed_slope_deviation=0.15
+        )
+        gamma.append(res[0].slope / 2)
+    with h5py.File(THEORY_DENSITY_RATIO_FILE) as f:
+            theory_gamma = f['gamma_max'][:]
+            theory_ratio = f['na_np_ratio'][:]
+
+    plt.style.use(MPLSTYLE_FILE)
+    plt.figure(figsize=FIGURE_HALF_SIZE)
+    plt.plot(
+        density_ratios,
+        gamma,
+        marker="o", color="white", ls="",
+        markeredgecolor="black", markeredgewidth=1,
+        label="Simulation",
+    )
+    plt.plot(
+        theory_ratio,
+        [g / runInfoForDenistyRatio(ratio).omega_pp for g in theory_gamma],
+        label="Linear theory"
+    )
+    plt.xscale("log")
+    plt.gca().set(
+        xlim=(1e-2, 1e0),
+        ylim=(0.0, 0.16),
+        yticks=np.arange(0.0, 0.17, 0.04),
+        xlabel=r"Density ratio $n_\alpha\,/\,n_\text{p}$",
+        ylabel=r"Growth rate $\gamma\,/\,\omega_\text{pp}$",
+    )
+    plt.legend()
+    if save:
+        _saveFigure(f"growth_rate-vs-density_ratio", "density_ratio_variation")
+
+def energyFractionsDensityRatio(save: bool=False):
+    plt.figure(figsize=(FIGURE_HALF_SIZE[0],2.5))
+    for idx, filename in enumerate(sorted(DENSITY_VARIATION_FOLDER.glob("density_*.h5"))):
+        ratio = 10 ** float(filename.stem.split("_")[-1])
+        info = runInfoForDenistyRatio(ratio)
+        with h5py.File(filename) as f:
+            time = f["Header/time"][:] * info.omega_pp
+            e_avg_e = np.mean(f[f"Derived/Average_Particle_Energy/Electrons"], axis=1)
+            e_avg_p = np.mean(f[f"Derived/Average_Particle_Energy/Protons"], axis=1)
+            e_avg_a = np.mean(f[f"Derived/Average_Particle_Energy/Alphas"], axis=1)
+            energy = f["Electric Field/ex"][:] ** 2
+        energy = np.mean(
+            energy,
+            axis=tuple(range(1, energy.ndim))
+        ) * (constants.epsilon_0 / 2) / (64 * info.lambda_D) ** 3
+        fit_result = analysis.fitGrowthRate(time, energy, allowed_slope_deviation=0.1, reverse_search_direction=True)
+        last_idx = (fit_result[1][1] + 880)
+        plt.plot(ratio, (e_avg_a[0] - e_avg_a[last_idx] - (e_avg_p[last_idx] - e_avg_p[0]) - (e_avg_e[last_idx] - e_avg_e[0])) / (e_avg_a[0] - e_avg_a[last_idx]), marker="o", markeredgecolor="black", markeredgewidth=1, label=r"$W_E\,/\,|\Delta W_\alpha|$" if idx == 0 else None, color="white")
+        plt.plot(ratio, (e_avg_p[last_idx] - e_avg_p[0]) / (e_avg_a[0] - e_avg_a[last_idx]), marker="v", markeredgecolor="black", markeredgewidth=1, label=r"$W_\text{p}\,/\,|\Delta W_\alpha|$" if idx == 0 else None, color="cornflowerblue")
+        plt.plot(ratio, (e_avg_e[last_idx] - e_avg_e[0]) / (e_avg_a[0] - e_avg_a[last_idx]), marker="p", markeredgecolor="black", markeredgewidth=1, label=r"$W_\text{e}\,/\,|\Delta W_\alpha|$" if idx == 0 else None, color="gray")
+    plt.xscale("log")
+    plt.legend()
+    plt.xlabel(r"Density ratio $n_\alpha\,/\,n_\text{p}$")
+    plt.ylabel(r"Energy fractions $W\,/\,|\Delta W_\alpha|$ (1)" )
+    plt.xlim(1e-2, 1e0)
+    if save:
+        _saveFigure(f"energy_fractions-vs-density_ratio", "density_ratio_variation")

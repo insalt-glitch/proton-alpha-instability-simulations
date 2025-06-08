@@ -251,7 +251,6 @@ def _validateNumProcs(arg: str) -> int:
     return n_procs
 
 if __name__ == "__main__":
-    # TODO: This entire thing seems stupid to deal with folders when we are really dealing with files??
     arg_parser = argparse.ArgumentParser(
         prog="h5vstack",
         description="Converts all SDF-files in a folder to HDF5-files. "

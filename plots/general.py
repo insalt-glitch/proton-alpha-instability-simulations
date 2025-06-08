@@ -290,7 +290,7 @@ def spaceVelocityDistributionMulti(
         quad = ax.pcolormesh(
             x_grid, v, f_v.T / max_f, norm="log",
             cmap=plt.cm.get_cmap("viridis"),
-            vmin=min_f/max_f, vmax=1.0, rasterized=True,
+            vmin=1e-2, vmax=1.0, rasterized=True, # min_f/max_f
         )
 
         if v_lim is None:
@@ -323,7 +323,7 @@ def spaceVelocityDistributionMulti(
         use_gridspec=True,
         # fraction=0.03,
         pad=0.02,
-        label=f"Distribution $\\langle f_{species.symbol()}\\rangle_{{{dist_type.space()}}}$ (s$\\,/\\,$m$^2$)",
+        label=f"Distribution $f_{species.symbol()}$ (s$\\,/\\,$m$^2$)",
     )
     # plt.tight_layout(pad=0.1)
     if save:

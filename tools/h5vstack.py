@@ -15,12 +15,12 @@ import numpy as np
 from tqdm import tqdm
 
 INFO_GROUPS = ["/Run_info", "/Header"]
-CONSTANT_GROUPS = ["/Grid/CPUs", "/Grid/grid"]
+CONSTANT_GROUPS = ["/Grid/CPUs"] # "/Grid/grid"
 
 # TODO: This script should be able to operate on a number of files as well (instead of folders)
 # TODO: We cannot handle changing attributes in general currently (not even on datasets). In that case, we could just create a group with multiple datasets in it.
 # It is slightly complicated however to infer which datasets are changing before doing the merge. (We don't have unlimited memory)
-# TODO: Would be nice to be able to specify a desried max. File size and than split up the result in smaller files.
+# TODO: Would be nice to be able to specify a desired max. File size and than split up the result in smaller files.
 # TODO: There is no way to include/exclude subgroups of other groups
 # TODO: There is no way to handle extra data on some files (currently crashes).
 
