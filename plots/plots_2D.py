@@ -799,6 +799,7 @@ def videoPxPyDistribution(
             horizontalalignment='right',
             verticalalignment='top',
             s=f"t$\\,\\omega_\\text{{pp}}=\\,${time[0]:>5.1f}",
+            color="white",
             transform=ax.transAxes
     )
     if normalized_velocity:
@@ -809,6 +810,11 @@ def videoPxPyDistribution(
         ax.set_ylabel(f"Velocity $v_{{{species.symbol()},y}}$ (km/s)")
     ax.set_xlim(np.min(non_zero_v_x), np.max(non_zero_v_x))
     ax.set_ylim(np.min(non_zero_v_y), np.max(non_zero_v_y))
+
+    tight_bbox = fig.get_tightbbox()
+    fig.set_size_inches(tight_bbox.width, tight_bbox.height)
+    fig.set_layout_engine("tight", pad=0.01)
+    fig.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
 
     def update(frame_idx):
         quad.set_array(f_v[frame_idx].T)
@@ -926,7 +932,7 @@ def potentialFromElectricField(E_x, E_y, x, y):
     phi = np.real(np.fft.ifft2(phi_fft))
     return phi
 
-def _pxPyDistSubplot(fig, ax: plt.Axes, info: RunInfo, filename: Path, species: Species, time: float, xlim, ylim, colorbar):
+def _pxPyDistSubplot(fig, ax: plt.Axes, info: RunInfo, filename: Path, species: Species, time: float, xlim, ylim, colorbar, regimes):
     f_v0 = _loadPxPyDistribution(info, species, filename, 0, True)[2]
     f_v_max = np.nanmax(f_v0)
     f_v_min = np.nanmin(f_v0[f_v0>0] / f_v_max)
@@ -978,7 +984,7 @@ def _pxPyDistSubplot(fig, ax: plt.Axes, info: RunInfo, filename: Path, species: 
         width=100, height=2 * v_trap, angle=(np.pi/2 - theta) * 180 / np.pi,
         edgecolor="black", zorder=1, facecolor="#c7c7c7", alpha=0.2
     )
-    if colorbar:
+    if regimes:
         delta = 0 if species == Species.PROTON else 4 * v_trap
         alpha = theta
         arrow_fix = 0.24 if species == Species.PROTON else 0.18
@@ -1033,7 +1039,7 @@ def velocitySpaceVsFlowVelocity(info, filename, save: bool=True):
     i = 0
     for row_idx, (ax_row, time, colorbar) in enumerate(zip(axes, [55.0, 150.0], [True, False])):
         for ax, species, xlim, ylim in zip(ax_row, [Species.PROTON, Species.ALPHA], [(-3, 9), (0, 9)], [(-6, 6), (-5, 5)]):
-            _pxPyDistSubplot(fig, ax, info, filename, species, time, xlim, ylim, colorbar)
+            _pxPyDistSubplot(fig, ax, info, filename, species, time, xlim, ylim, colorbar, colorbar)
             if row_idx == 1:
                 ax.set_xlabel(f"Velocity $v_{{{species.symbol()},x}}\\,/\\,v^{{t=0}}_{{\\text{{t}}{species.symbol()}}}$ (1)")
             ax.text(

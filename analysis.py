@@ -465,7 +465,6 @@ def estimateFrequency(
 
     # estimate index of peak center
     mean_fft = np.mean(fft, axis=tuple(-(i+1) for i in range(n_spatial_dims + 1) if -(i+1) != axis))
-    print(np.argmax(mean_fft, axis=-1))
     k = 2 * np.pi * np.argmax(mean_fft, axis=-1) / (dx * N)
     k_sys_err = np.pi / (dx * N)
     return k, k_sys_err

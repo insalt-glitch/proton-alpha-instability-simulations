@@ -49,7 +49,8 @@ def electricFieldOverSpaceAndTime(
     plt.figure(figsize=(FIGURE_FULL_SIZE[0], 3.5))
     plt.pcolormesh(time, grid_edges, ex[:-1].T, cmap="bwr", rasterized=True,
                    vmin=-np.max(np.abs(ex)), vmax=np.max(np.abs(ex)))
-    plt.colorbar(label="Electric field $E_x$ (V/m)")
+    cax = plt.colorbar(label="Electric field $E_x$ (V/m)")
+    cax.ax.set_yticks(np.linspace(-1, 1, 5,))
     plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
     plt.ylabel("Position $x\\,/\\,\\lambda_\\text{D}$ (1)")
     plt.yticks(np.arange(5) * 32)
@@ -609,7 +610,6 @@ def particleVariationWavenumber(
 
     mean_k = np.mean(k_arr, axis=-1)
     mean_k_err = np.sqrt(np.sum((k_err_arr / 4) ** 2, axis=-1) + np.var(k_arr, axis=-1) / 4)
-    print(np.std(k_arr, axis=-1))
     p8192_k_err = np.sqrt(p8192_k_err ** 2 + np.mean(np.var(k_arr, axis=1)[-2:]))
 
     plt.style.use(MPLSTYLE_FILE)
@@ -770,7 +770,12 @@ def particleVariationGrowthRate(
         ls="", lw=1.5, color="white",
         marker="p", markersize=10, markeredgecolor="black", markeredgewidth=1.5
     )
-    l_theory = plt.axhline(theory.growthRate(1e-1), color="black", ls=":")
+    with h5py.File(THEORY_DENSITY_RATIO_FILE) as f:
+        na_np = f["na_np_ratio"][:]
+        idx = np.argmin(np.abs(na_np- 1e-1))
+        theory_info = runInfoForDenistyRatio(na_np[idx])
+        gamma_max = f["gamma_max"][idx] / theory_info.omega_pp
+    l_theory = plt.axhline(gamma_max, color="black", ls=":")
     plt.ylim(1e-2, 13e-2)
     y_min, y_max = plt.gca().get_ylim()
     r_fail = plt.fill_between(
@@ -850,7 +855,7 @@ def linearTheoryWaveProperties(info: RunInfo, save: bool=False):
     fig, axes = plt.subplots(1, 2, figsize=(FIGURE_FULL_SIZE[0], 3.2), sharey=True)
     axes: list[plt.Axes] = axes
 
-    with h5py.File("theory_density_ratio.h5") as f:
+    with h5py.File(THEORY_DENSITY_RATIO_FILE) as f:
         na_np = f["na_np_ratio"][:]
         n_p = info.electron.number_density / (2 * na_np + 1)
         omega_pp = physics.plasmaFrequency(
@@ -905,7 +910,6 @@ def linearTheoryWaveProperties(info: RunInfo, save: bool=False):
         out=np.zeros_like(omega),
         where=(np.mean(v_ph_magic) + popt[0]) / (u_alpha * 1e3) < 1
     )
-    print(np.nansum((magic - theta) ** 2) / np.nansum((theta - np.nanmean(theta)) ** 2))
     axes[1].plot(
         u_alpha, magic, color="#bb0000", ls=(0,(1,1,1,5)),
         label=r"$\theta_\text{max}^\text{geom}$",
@@ -1070,7 +1074,7 @@ def illustrateSimulationGrid(save: bool=False):
     rng = np.random.default_rng(2)
     plt.style.use(MPLSTYLE_FILE)
     plt.figure(figsize=(FIGURE_FULL_SIZE[0], 3))
-    plt.plot(0.1 + rng.random(100) * 3.8, rng.random(100) * 2, ls="", marker="o", markersize=3, color="#aaaaaa")
+    plt.plot(0.1 + rng.random(100) * 3.8, rng.random(100) * 2, ls="", marker="o", markersize=3, color="#aaaaaa", markeredgewidth=0)
     plt.plot(3.15, 0.85, ls="", marker="o", markersize=5, markeredgecolor="black", markeredgewidth=1, color="#666666")
     plt.arrow(3.15, 0.85, -0.27, 0.25, head_width=0.04, width=0.01, color="black", length_includes_head=True)
     plt.text(
@@ -1181,7 +1185,7 @@ def heatingVsDensityRatio(species: Species, save: bool=False):
     plt.gca().set(
         xscale="log",
         xlabel=r"Density ratio $n_\alpha\,/\,n_\text{p}$ (1)",
-        ylabel=f"Temperature $\\Delta T_{{{species.symbol()},x}}$ (eV)",
+        ylabel=f"Heating $\\Delta T_{{{species.symbol()},x}}$ (eV)",
         xlim=(1e-2, 1e0),
     )
     if save:
@@ -1229,12 +1233,9 @@ def wavenumberVsDensityRatio(save: bool=False):
 
     with h5py.File(THEORY_DENSITY_RATIO_FILE) as f:
         theory_k_max = f['k_max'][:]
-        # theory_gamma_max = f['gamma_max'][:]
         theory_ratio = f['na_np_ratio'][:]
-    # theory_gamma_max = np.array([k / runInfoForDenistyRatio(ratio).omega_pp for k, ratio in zip(theory_gamma_max, theory_ratio)])
     theory_k_max = np.array([k * runInfoForDenistyRatio(ratio).lambda_D for k, ratio in zip(theory_k_max, theory_ratio)])
     plt.plot(theory_ratio, theory_k_max, label="Theory")
-    # plt.plot(theory_ratio, theory_gamma_max, label="Theory")
 
     plt.xscale("log")
     plt.xlabel(r"Density ratio $n_\alpha\,/\,n_\text{p}$ (1)")

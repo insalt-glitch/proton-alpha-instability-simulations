@@ -17,6 +17,7 @@ from .settings import (
     FIGURE_FORMAT,
     FIGURES_FOLDER,
     VIDEO_FORMAT,
+    VIDEO_DPI,
     FIGURE_FULL_SIZE,
     FIGURE_HALF_SIZE,
 )
@@ -46,6 +47,7 @@ def generalSaveVideo(ani: animation.FuncAnimation, vid_name: str, sub_folder: st
     folder.mkdir(exist_ok=True, parents=True)
     ani.save(
         folder / f"{vid_name}.{VIDEO_FORMAT.lower()}",
+        dpi=VIDEO_DPI,
         writer="ffmpeg", fps=30
     )
     plt.clf()
@@ -179,7 +181,7 @@ def momentumDistributionComparison(
             assert len(labels) == len(times), "Either use auto labels or provide one for each time."
         files = repeat(files)
         if legend_title is None:
-            legend_title = "Time $t\\,\\omega_{pp}$ (1)"
+            legend_title = r"Time $t\,\omega_\text{pp}$ (1)"
     plt.style.use(MPLSTYLE_FILE)
     plt.figure(figsize=FIGURE_HALF_SIZE)
     min_v, max_v = np.inf, - np.inf
@@ -193,7 +195,7 @@ def momentumDistributionComparison(
 
     plt.yscale("log")
     if normalized_velocity:
-        plt.xlabel(f"Velocity $v_{species.symbol()}\\,/\\,v^{{t=0}}_{species.symbol()}$ (1)")
+        plt.xlabel(rf"Velocity $v_{species.symbol()}\,/\,v^{{t=0}}_{{\text{{t}}{species.symbol()}}}$ (1)")
     else:
         plt.xlabel(f"Velocity $v_{species.symbol()}$ (km$\\,/\\$s)")
     plt.ylabel(f"Distribution $\\langle f_{species.symbol()}\\rangle_{{{dist_type.space().lower()}}}$ (s$\\,/\\,$m$^2$)")
@@ -256,9 +258,11 @@ def spaceVelocityDistributionMulti(
     normalized_velocity: bool=True,
     v_lim: tuple[float|None,float|None]|None=None,
     v_ticks: list[float]|None=None,
+    subfig_offset: int=0,
     save: bool=False,
     save_folder: str|None=None,
 ):
+    assert subfig_offset>=0, "Start at (a) == 0 or higher, must be non-negative"
     v_list = []
     f_v_list = []
     max_f = -np.inf
@@ -278,7 +282,8 @@ def spaceVelocityDistributionMulti(
         sharex=True, height_ratios=(1,1,1),
     )
     axes: list[plt.Axes] = axes
-    for ax_idx, (t, ax, v, f_v) in enumerate(zip(times, axes, v_list, f_v_list)):
+    ax_idx = subfig_offset
+    for t, ax, v, f_v in zip(times, axes, v_list, f_v_list):
         dv = abs(v[1] - v[0])
         v = np.concat([[v[0]-dv], v]) + dv / 2
 
@@ -306,6 +311,7 @@ def spaceVelocityDistributionMulti(
             color="white",
             transform=ax.transAxes,
         )
+        ax_idx += 1
         if v_ticks is not None: ax.set_yticks(v_ticks)
     axes[-1].set(
         xlabel=f"Position {dist_type.space().lower()}$\\,/\\,\\lambda_\\text{{D}}$ (1)",
@@ -412,6 +418,62 @@ def videoMomentumDistribution(
             ani,
             f"{dist_type.momentum().lower()}_distribution-{species}",
             f"{dist_type.momentum().lower()}_distribution"
+        )
+    else:
+        return HTML(ani.to_jshtml())
+
+def videoEvolutionDistributionFunction(
+    info: RunInfo, species: Species, filename: Path,
+    dist_type: Distribution, time: range, vlim: tuple=None, vticks: list=None, save: bool=False):
+    v, f_v = _loadSpaceMomDistribution(
+        info, species, filename, dist_type, time, True
+    )
+    dv = abs(v[:,1] - v[:,0])
+    v = np.concat([(v[:,0]-dv)[:,None], v], axis=1) + dv[:,None] / 2
+    with h5py.File(filename) as f:
+        if f"Grid/grid/{dist_type.space()}" in f:
+            x_grid = f[f"Grid/grid/{dist_type.space()}"][:] / info.lambda_D
+        else:
+            x_grid = np.squeeze(f["Grid/grid"][:]) / info.lambda_D
+    f_v /= np.max(f_v[0])
+    plt.style.use(MPLSTYLE_FILE)
+    fig, ax = plt.subplots(figsize=(FIGURE_FULL_SIZE[0], 2))
+    quad = plt.pcolormesh(x_grid, v[0], f_v[0].T, norm="log", cmap=plt.get_cmap("viridis"))
+    cax = plt.colorbar(label=f"$\\langle f_{species.symbol()}\\rangle_{{{dist_type.space()}}}$ (a.u.)")
+    text = plt.text(
+        0.98, 0.95, s=rf"$t\,\omega_\text{{pp}}={time[0] / 10}$",
+        horizontalalignment='right',
+        verticalalignment='top',
+        color="white",
+        transform=ax.transAxes,
+    )
+    ax.set_facecolor(cax.cmap.get_under())
+    plt.xlabel(f"Position {dist_type.space().lower()}$\\,/\\,\\lambda_\\text{{D}}$ (1)")
+    plt.ylabel(f"Velocity $v_{species.symbol()}\\,/\\,v^{{t=0}}_{{\\text{{t}}{species.symbol()}}}$ (1)")
+    if vlim is None:
+        plt.ylim(np.min(v), np.max(v))
+    else:
+        plt.ylim(*vlim)
+    if vticks:
+        plt.yticks(vticks)
+    plt.xticks(np.linspace(0, 128, 5))
+    tight_bbox = fig.get_tightbbox()
+    fig.set_size_inches(tight_bbox.width, tight_bbox.height)
+    fig.set_layout_engine("tight", pad=0.1)
+    fig.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
+
+    def update(frame_idx):
+        quad.set_array(f_v[frame_idx].T)
+        quad._coordinates = np.array(np.meshgrid(v[frame_idx], x_grid)[::-1]).T
+        text.set_text(f"t$\\,\\omega_\\text{{pp}}\\,=\\,${time[frame_idx]//10:>5.1f}")
+        return (quad, text,)
+    frames = list(range(len(list(time))))
+    ani = animation.FuncAnimation(fig=fig, func=update, frames=frames)
+    if save:
+        generalSaveVideo(
+            ani,
+            f"x_px_distribution-{species}",
+            "x_px_distribution"
         )
     else:
         return HTML(ani.to_jshtml())
