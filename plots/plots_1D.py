@@ -903,6 +903,7 @@ def linearTheoryWaveProperties(info: RunInfo, save: bool=False):
         xdata=u_alpha[u_alpha>100] * 1e3,
         ydata=np.cos(theta[u_alpha>100]), p0=[np.sqrt(np.pi/2) * info.alpha.v_thermal]
     )
+    print(popt[0] / info.alpha.v_thermal)
     magic = np.arccos(
         (np.mean(v_ph_magic) + popt[0]) / (u_alpha * 1e3),
         out=np.zeros_like(omega),
