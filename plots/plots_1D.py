@@ -10,7 +10,6 @@ from scipy import constants, optimize, signal, io
 import h5py
 
 import analysis
-import theory
 from basic import physics, Distribution
 from .general import generalSaveFigure, plotEnergyEFieldOverTime, _loadSpaceMomDistribution
 
@@ -385,9 +384,9 @@ def particleVariationTemperature3D(
         processElement=lambda x: physics.kelvinToElectronVolt(np.mean(x, axis=1)),
         recursive=True
     )
-    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
+    with h5py.File(PARTICLE_VARIATION_FOLDER / "particles_8192/rep_0.h5") as f:
         p8192_temperature = physics.kelvinToElectronVolt(np.mean(
-            f[f"Derived/Temperature/{species.value}"][:temperatures.shape[-1]],
+            f[f"Derived/Temperature/{species.value}"][:],
             axis=1
         ))
     # extract particle numbers
@@ -426,7 +425,7 @@ def particleVariationEnergyVsTime(
         processElement=lambda x: np.mean(np.array(x) ** 2, axis=1),
         recursive=True
     )
-    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
+    with h5py.File(PARTICLE_VARIATION_FOLDER / "particles_8192/rep_0.h5") as f:
         p8192_time = f["Header/time"][:]
         p8192_energy = np.mean(f["Electric Field/ex"][:] ** 2, axis=1)
 
@@ -473,9 +472,9 @@ def particleVariationTemperatureXDiff(
         x_grid = f[f"Grid/x_px/{species.value}/X"][:]
         px_grid = f[f"Grid/x_px/{species.value}/Px"][:]
 
-    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
-        p8192_time = f["Header/time"][:time.size]
-        p8192_dist = np.mean(f[f"/dist_fn/x_px/{species.value}"][:time.size], axis=1)
+    with h5py.File(PARTICLE_VARIATION_FOLDER / "particles_8192/rep_0.h5") as f:
+        p8192_time = f["Header/time"][:]
+        p8192_dist = np.mean(f[f"/dist_fn/x_px/{species.value}"][:], axis=1)
         p8192_x_grid = f[f"Grid/x_px/{species.value}/X"][:]
         p8192_px_grid = f[f"Grid/x_px/{species.value}/Px"][:]
 
@@ -535,9 +534,9 @@ def particleVariationTemperatureXVsTime(
         x_grid = f[f"Grid/x_px/{species.value}/X"][:]
         px_grid = f[f"Grid/x_px/{species.value}/Px"][:]
 
-    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
-        p8192_time = f["Header/time"][:time.size]
-        p8192_dist = np.mean(f[f"/dist_fn/x_px/{species.value}"][:time.size], axis=1)
+    with h5py.File(PARTICLE_VARIATION_FOLDER / "particles_8192/rep_0.h5") as f:
+        p8192_time = f["Header/time"][:]
+        p8192_dist = np.mean(f[f"/dist_fn/x_px/{species.value}"][:], axis=1)
         p8192_x_grid = f[f"Grid/x_px/{species.value}/X"][:]
         p8192_px_grid = f[f"Grid/x_px/{species.value}/Px"][:]
 
@@ -727,7 +726,7 @@ def particleVariationGrowthRate(
         time_interval=slice(0,751),
         recursive=True
     )
-    with h5py.File(FOLDER_1D / "proton-alpha-instability-1D.h5") as f:
+    with h5py.File(PARTICLE_VARIATION_FOLDER / "particles_8192/rep_0.h5") as f:
         p8192_time = f["Header/time"][:]
         p8192_energy = np.mean(f["Electric Field/ex"][:] ** 2, axis=1)
 
@@ -796,7 +795,6 @@ def particleVariationGrowthRate(
         _saveFigure("growth_rate-vs-num_particles", "particles_per_cell")
 
 def linearTheoryDensityRatio(info: RunInfo, save: bool=False):
-    import theory
     with h5py.File(THEORY_DENSITY_RATIO_FILE) as f:
         na_np = f["na_np_ratio"][:]
         n_p = info.electron.number_density / (2 * na_np + 1)

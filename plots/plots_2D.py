@@ -1266,3 +1266,105 @@ def heatingVsMagneticField(info: RunInfo, species: Species, save: bool=False):
     plt.tick_params(axis='x', which='major', length=0)
     if save:
         _saveFigure(f"heating_{species.value.lower()}-vs-magnetic_field_direction", "magnetic_fields")
+
+def tempeatureOverTimeVsMagneticField(info: RunInfo, species: Species, save: bool=False):
+    # plot 3D temperature vs time for different magnetic fields.
+    plt.style.use(MPLSTYLE_FILE)
+    plt.figure()
+
+    leg_u100 = []
+    leg_u140 = []
+    for u_label in [100, 140]:
+        for folder_id, label in zip(["", "_Bx", "_By", "_Bz", "_Bx_By"], ["B=0", "B_x>0", "B_y>0", "B_z>0", "B_x=B_y"]):
+            for filename in sorted((FOLDER_2D / f"v_alpha_bulk_variation{folder_id}").glob("*.h5")):
+                u = int(filename.stem[-3:])
+                if u != u_label:
+                    continue
+                with h5py.File(filename) as f:
+                    time = f["Header/time"][:] * info.omega_pp
+                    temp = np.mean(f[f"Derived/Temperature/{species.value}"], axis=(1,2))
+                line = plt.plot(
+                    time, physics.kelvinToElectronVolt(temp),
+                    label=f"${label}$"
+                )[0]
+                (leg_u100 if u_label == 100 else leg_u140).append(line)
+    leg1 = plt.legend(handles=leg_u100, loc="upper left", title="$u_\\alpha^{t=0}$=100 km/s",ncols=1 if species == Species.ELECTRON else 2, columnspacing=0.5, labelspacing=0.5, fancybox=False, framealpha=0.4)
+    plt.legend(handles=leg_u140, title="$u_\\alpha^{t=0}$=140 km/s", loc="lower right", ncols=3 if species == Species.ELECTRON else 2, columnspacing=0.5, labelspacing=0.5, fancybox=False, framealpha=0.4)
+    plt.gca().add_artist(leg1)
+    plt.xlabel("Time $t\\,\\omega_{pp}$ (1)")
+    plt.ylabel(f"Temperature $T_{species.symbol()}$ (eV)")
+    plt.xlim(0, 150.0)
+    y_low = 1.5 if species == Species.PROTON else 5
+    plt.ylim(bottom=2 if species == Species.PROTON else 10 if species == Species.ALPHA else 99.7)
+    plt.tight_layout(pad=0.2)
+    if save:
+        _saveFigure(f"temperature_{species.value.lower()}-vs-time", "magnetic_fields")
+
+def gammaVsFlowVelocity(info: RunInfo, save: bool=False):
+    files = sorted(V_FLOW_VARIATION_FOLDER.glob("*.h5"))
+    flow_velocity = np.empty(len(files))
+    growth_rate = []
+    for file_idx, filename in enumerate(files):
+        flow_velocity[file_idx] = int(filename.stem[-3:])
+        with h5py.File(filename) as f:
+            E_x = f['Electric Field/ex'][1:]
+            E_y = f['Electric Field/ey'][1:]
+            time = f["Header/time"][1:] * info.omega_pp
+        res = analysis.fitGrowthRate(time, np.mean(E_x ** 2 + E_y ** 2, axis=(1,2)), allowed_slope_deviation=0.5)
+        growth_rate.append(res[0].slope/2)
+    growth_rate = np.array(growth_rate)
+    plt.plot(flow_velocity, growth_rate, ls="", marker="o", color="white", markeredgecolor="black", markeredgewidth=1)
+    with h5py.File(THEORY_U_ALPHA_FILE) as f:
+            theory_v = f["u_alpha_bulk"][:] / 1e3
+            theory_gamma = f["gamma_max"][:] / info.omega_pp
+    plt.plot(theory_v, theory_gamma)
+    if save:
+        _saveFigure(f"gamma-vs-flow_velocity", "alpha_flow_velocity_variation")
+
+def heatingVsFlowVelocitySpecies(info: RunInfo, species: Species, save: bool=False):
+    files = sorted(V_FLOW_VARIATION_FOLDER.glob("*.h5"))
+    n_points: int=10
+
+    plt.style.use(MPLSTYLE_FILE)
+    fig, axes = plt.subplots(1, 2, figsize=(FIGURE_FULL_SIZE[0] - 0.3, 3), sharex=True)
+    for ax, normalize_temperature in zip(axes, [False, True]):
+        velocity = np.empty(len(files))
+        T_diff = np.empty(len(files))
+        T_diff_err = np.empty(len(files))
+        for file_idx, filename in enumerate(files):
+            velocity[file_idx] = int(filename.stem[-3:])
+            with h5py.File(filename) as f:
+                temp = physics.kelvinToElectronVolt(
+                    np.mean(f[f"Derived/Temperature/{species.value}"], axis=(1,2))
+                )
+            T_diff[file_idx] = np.mean(temp[-n_points:]) - np.mean(temp[:n_points])
+            T_diff_err[file_idx] = np.sqrt(
+                np.var(temp[-n_points:]) + np.var(temp[:n_points])
+            ) / np.sqrt(n_points)
+        if normalize_temperature:
+            K_alpha_t0 = (info.alpha.si_mass * (velocity * 1e3) ** 2 / (2 * constants.electron_volt))
+            T_diff /= K_alpha_t0
+            T_diff_err /= K_alpha_t0
+        else:
+            T_diff /= info[species].temperature
+            T_diff_err /= info[species].temperature
+        ax.errorbar(
+            velocity, T_diff, yerr=T_diff_err,
+            marker="p" if normalize_temperature else "o",
+            color="cornflowerblue" if normalize_temperature else "white",
+            ls="", markeredgecolor="black", markeredgewidth=1
+        )
+        ax.set(
+            xlim=(95, 185),
+            xticks=np.arange(100, 185, 20),
+        )
+        if normalize_temperature:
+            ax.ticklabel_format(style='sci', axis='y', scilimits=(-2,2), useMathText=True)
+            ax.set_ylabel(f"Heating $\\Delta T_{species.symbol()}\\,/\\,K_\\alpha^{{t=0}}$ (1)")
+        else:
+            ax.set_ylabel(f"Heating $\\Delta T_{species.symbol()}\\,/\\,T_{species.symbol()}$ (eV)")
+    axes[0].set_xlabel(f"Flow velocity $u_\\alpha^{{t=0}}$ (km$\\,/\\,$s)")
+    axes[1].set_xlabel(f"Flow velocity $u_\\alpha^{{t=0}}$ (km$\\,/\\,$s)")
+    fig.tight_layout(h_pad=0.2)
+    if save:
+        _saveFigure(f"heating-vs-flow_velocity-{species}", "alpha_flow_velocity_variation")

@@ -17,11 +17,9 @@ from tqdm import tqdm
 INFO_GROUPS = ["/Run_info", "/Header"]
 CONSTANT_GROUPS = ["/Grid/CPUs"] # "/Grid/grid"
 
-# TODO: This script should be able to operate on a number of files as well (instead of folders)
 # TODO: We cannot handle changing attributes in general currently (not even on datasets). In that case, we could just create a group with multiple datasets in it.
 # It is slightly complicated however to infer which datasets are changing before doing the merge. (We don't have unlimited memory)
-# TODO: Would be nice to be able to specify a desired max. File size and than split up the result in smaller files.
-# TODO: There is no way to include/exclude subgroups of other groups
+# TODO: Would be nice to be able to specify a desired max. file size and than split up the result in smaller files.
 # TODO: There is no way to handle extra data on some files (currently crashes).
 
 def isIncluded(
@@ -125,7 +123,7 @@ def copyDatasets(file_idx: int, src_file: h5py.File, target_file: h5py.File):
         src_ds = h5_obj
         target_ds = target_file[name]
         assert src_ds.shape == target_ds.shape[1:], f"Dimensions ({src_ds.shape} vs. {target_ds.shape[1:]} of '{name}' in '{src_file.filename}' do not match."
-        # TODO: Temporary work-around because we donÄt know what to do with changin attributes on datasets
+        # TODO: Temporary work-around because we don't know what to do with changin attributes on datasets
         # assert src_ds.attrs == target_ds.attrs, f"Attributes of '{name}' in '{src_file.filename}' do not match."
         # write data into target-file
         target_ds[file_idx] = src_ds

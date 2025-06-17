@@ -95,7 +95,7 @@ def plotEnergyEFieldOverTime(
     plt.xticks(np.linspace(0.0, 150.0, num=6))
     plt.yscale("log")
     plt.xlabel("Time $t\\,\\omega_\\text{pp}$ (1)")
-    plt.ylabel("Energy $\\langle W_E\\rangle_x$ (eV$\\,/\\,$m$^3$)") # \\mathbf{r}
+    plt.ylabel("Energy $\\langle W_E\\rangle_x$ (eV$\\,/\\,$m$^3$)")
     if show_legend:
         plt.legend()
 
