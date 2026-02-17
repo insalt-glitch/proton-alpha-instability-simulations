@@ -1040,7 +1040,6 @@ def vxVyDistSubplot(ax: plt.Axes, info: RunInfo, filename: Path, species: Specie
             y = y[0]
     phi = np.percentile(np.abs(potentialFromElectricField(Ex[:-1], Ey[:-1], x, y)), 99.9)
     v_trap = np.sqrt(2 * info[species].si_charge * phi / info[species].si_mass) / info[species].v_thermal
-    print(species, u_alpha, v_trap)
 
     with h5py.File(THEORY_U_ALPHA_FILE) as f:
         theory_v = f["u_alpha_bulk"][:] / 1e3
@@ -1243,7 +1242,7 @@ if __name__ == "__main__":
             print("Delta U_total / Delta K_a:", delta_U_tot / (W_loss * K_a))
             print()
     # Produce plots for the publication
-    folder = Path("figures/pub_rep")
+    folder = Path("figures/publication")
     folder.mkdir(exist_ok=True, parents=True)
     wave = analysis.extractWaveProperties(info, PIC_FILES)
     temperatureElectricFieldMosaic(info)
