@@ -12,7 +12,12 @@ from typing import List, Any
 
 import h5py
 from tqdm import tqdm
-import sdf_helper as sdf
+import sdfr
+from sdfr.SDF import (
+    BlockPlainVariable,
+    BlockPlainMesh,
+    BlockConstant,
+)
 
 IGNORED_ATTRIBUTES = [
     "blocklist", "datatype", "dims", "data_length", "grid_mid", "grid"
@@ -59,12 +64,15 @@ def addAttribute(
                 )
             except:
                 print(f"Could not create tuple-attribute '{attr_name}' for block '{h5_obj.name}'")
+    elif attr_value is None:
+        pass
     else:
         print(f"Unexpected type '{type(attr_value)}' for attribute '{attr_name}'")
 
+
 def saveNativeBlock(
     h5_file: h5py.File,
-    block: sdf.sdf.BlockPlainVariable|sdf.sdf.BlockPlainMesh|sdf.sdf.BlockConstant,
+    block: BlockPlainVariable|BlockPlainMesh|BlockConstant,
     compression_level: int,
 ) -> None:
     """Save a block from the SDF-format to the HDF5-file.
@@ -83,7 +91,7 @@ def saveNativeBlock(
 
     object_name = Path(block.name).with_stem(Path(block.id).name).as_posix()
     if hasattr(block, "labels") and len(block_data) > 1:  # assumes that that all grids are converted to tuples
-        assert isinstance(block, sdf.sdf.BlockPlainMesh), "Expected mesh"
+        assert isinstance(block, BlockPlainMesh), "Expected mesh"
         h5_obj = h5_file.create_group(name=object_name)
         for idx, axis_label in enumerate(block.labels):
             dataset = h5_obj.create_dataset(
@@ -92,11 +100,12 @@ def saveNativeBlock(
             )
             for attr_name in ["extents", "mult", "units"]:
                 if hasattr(block, attr_name):
-                    attr_data = getattr(block, attr_name)[idx]
-                    addAttribute(dataset, attr_name, attr_data)
+                    attr_data = getattr(block, attr_name)
+                    if attr_data is not None:
+                        addAttribute(dataset, attr_name, attr_data[idx])
             ignored_names = IGNORED_ATTRIBUTES + ["data", "extents", "mult", "units"]
             for attr_name in dir(block):
-                if attr_name.startswith("__") or attr_name in ignored_names:
+                if attr_name.startswith("_") or attr_name in ignored_names:
                     continue
                 if not hasattr(block, attr_name):
                     continue
@@ -106,13 +115,15 @@ def saveNativeBlock(
 
     else:
         ignored_names = IGNORED_ATTRIBUTES + ["data"]
+        if object_name in h5_file:
+            return
         try:
             dataset = h5_file.create_dataset(name=object_name, data=block_data)
         except:
             print(f"WARNING: Could not create {object_name} dataset. Skipped!")
             return
         for attr_name in dir(block):
-            if attr_name.startswith("__") or attr_name in ignored_names:
+            if attr_name.startswith("_") or attr_name in ignored_names:
                 continue
             if not hasattr(block, attr_name):
                 continue
@@ -141,16 +152,17 @@ def saveSDFFileToHDF5(sdf_file_path: Path, h5_file_path: Path, compression_level
     """
     assert sdf_file_path.exists(), "File should exist"
     assert 0 <= compression_level <= 9, "Compression level must be integer 0-9"
-    sdf_data = sdf.getdata(sdf_file_path.as_posix(), verbose=False)
-    sdf_blocks = [x for x in dir(sdf_data) if not x.startswith("__")]
-
+    sdf_data = sdfr.read(sdf_file_path.as_posix())
+    # print(sdf_data.name_dict)
+    # sdf_data = sdfr.sdf_helper.getdata(sdf_file_path.as_posix(), verbose=False)
+    sdf_blocks = sdf_data.name_dict # [x for x in dir(sdf_data) if not x.startswith("__")]
     with h5py.File(h5_file_path, mode="w") as h5_file:
         # save each 'block' in the file. These are the quantities/variables/grids
         for block_name in sdf_blocks:
             # NOTE: mid-points are never saved
             if block_name.endswith("_mid"):
                 continue
-            block = getattr(sdf_data, block_name)
+            block = sdf_blocks[block_name]
             if isinstance(block, dict):
                 saveInfoBlock(h5_file, block_name, block)
             else:

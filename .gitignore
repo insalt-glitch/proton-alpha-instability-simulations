@@ -1,2 +1,6 @@
 __pycache__/
 figures/
+.ipynb_checkpoints/
+# pixi environments
+.pixi/*
+!.pixi/config.toml

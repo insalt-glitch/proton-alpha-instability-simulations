@@ -9,6 +9,7 @@ from scipy import optimize, constants, special
 from tqdm import tqdm
 
 from basic import RunInfo, SpeciesInfo
+from basic.paths import THEORY_U_ALPHA_FILE
 
 def propertiesAtMaxGrowthRate(
     Vab: float, cs: float,
@@ -65,7 +66,7 @@ def propertiesAtMaxGrowthRate(
     return gamma_max, theta_max, k_max, omega_max
 
 if __name__ == "__main__":
-    OUTPUT_FILENAME = Path("theory_u_alpha_dispersion_v2.h5")
+    OUTPUT_FILENAME = THEORY_U_ALPHA_FILE
     info = RunInfo(
         electron=SpeciesInfo(
             number_density=12.0e6,
@@ -108,7 +109,7 @@ if __name__ == "__main__":
     )
     tqdm.set_lock(RLock())
     with ThreadPoolExecutor(
-        max_workers=8,
+        max_workers=12,
         initializer=tqdm.set_lock,
         initargs=(tqdm.get_lock(),)
     ) as pool:
@@ -121,6 +122,7 @@ if __name__ == "__main__":
     theta_max = results[1]
     k_max = results[2]
     omega_max = results[3]
+    OUTPUT_FILENAME.parent.mkdir(exist_ok=True, parents=True)
     with h5py.File(OUTPUT_FILENAME, mode="x") as f:
         f["search_space/theta"] = theta_arr
         f["search_space/theta"].attrs["unit"] = "radians"

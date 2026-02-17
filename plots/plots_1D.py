@@ -603,9 +603,12 @@ def particleVariationWavenumber(
     _, regime, _ = analysis.fitGrowthRate(
         p8192_time, np.mean(p8192_E_field ** 2, axis=1)
     )
+
     p8192_k, p8192_k_err = analysis.estimateFrequency(
-        -1, p8192_grid, p8192_E_field[:regime[-1]]
+        -1, p8192_grid[0], p8192_E_field[:regime[-1]]
     )
+    print(grid.shape, p8192_grid.shape, p8192_E_field.shape)
+    print(p8192_k_err.shape, p8192_k.shape)
 
     mean_k = np.mean(k_arr, axis=-1)
     mean_k_err = np.sqrt(np.sum((k_err_arr / 4) ** 2, axis=-1) + np.var(k_arr, axis=-1) / 4)
@@ -903,7 +906,7 @@ def linearTheoryWaveProperties(info: RunInfo, save: bool=False):
         xdata=u_alpha[u_alpha>100] * 1e3,
         ydata=np.cos(theta[u_alpha>100]), p0=[np.sqrt(np.pi/2) * info.alpha.v_thermal]
     )
-    print(popt[0] / info.alpha.v_thermal)
+    print(popt[0], np.mean(v_ph_magic) + popt[0])
     magic = np.arccos(
         (np.mean(v_ph_magic) + popt[0]) / (u_alpha * 1e3),
         out=np.zeros_like(omega),
@@ -937,7 +940,7 @@ def linearTheoryWaveProperties(info: RunInfo, save: bool=False):
         generalSaveFigure("linear_theory-wave_properties")
 
 def illustrateVelocitySpace(info: RunInfo, u_alpha: float|None=None, save: bool=False):
-    v_ph = 69
+    v_ph = 68377.24637531093
     v_th = np.sqrt(3/2) * info.alpha.v_thermal * 1e-3
     u_crit = v_ph + v_th
     if u_alpha is None:

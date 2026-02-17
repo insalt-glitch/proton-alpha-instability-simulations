@@ -1,5 +1,7 @@
 from scipy import optimize, constants, special
 import numpy as np
+from tqdm import tqdm
+from basic.paths import THEORY_DENSITY_RATIO_FILE
 
 ne = 12e6 # 1/m^3
 Te = 100 # eV
@@ -36,7 +38,7 @@ k_max       = np.full_like(nanp_ratio, fill_value=np.nan)
 omega_max   = np.full_like(nanp_ratio, fill_value=np.nan)
 
 for ratio_idx, (n_p, n_a, wpp, wpa) in enumerate(zip(
-    np_arr, na_arr, wpp_arr, wpa_arr
+    tqdm(np_arr), na_arr, wpp_arr, wpa_arr
 )):
     for k_idx in range(len(k_arr)):
         xip = lambda omega: omega / (k_arr[k_idx] * vp)
@@ -80,8 +82,8 @@ for ratio_idx, (n_p, n_a, wpp, wpa) in enumerate(zip(
         omega_max[ratio_idx] = np.real(omega_arr[idxgam])
 
 import h5py
-
-with h5py.File("theory_density_ratio.h5", mode="x") as f:
+THEORY_DENSITY_RATIO_FILE.parent.mkdir(exist_ok=True, parents=True)
+with h5py.File(THEORY_DENSITY_RATIO_FILE, mode="x") as f:
     f["na_np_ratio"] = nanp_ratio
     f["k_max"] = k_max
     f["omega_max"] = omega_max

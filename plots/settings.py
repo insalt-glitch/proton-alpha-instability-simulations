@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 
 VIDEO_FORMAT = "mp4"
 VIDEO_DPI = 200
-FIGURE_FORMAT = "pdf"
+FIGURE_FORMAT = "png"
 FIGURE_DPI = 200
 FIGURE_FULL_SIZE = (5.9, 4.2)
 FIGURE_HALF_SIZE = (213.39568/72.27, 213.39568/72.27)

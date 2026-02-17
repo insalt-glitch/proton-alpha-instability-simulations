@@ -166,8 +166,10 @@ def normalizeDistributionXPx1D(
     dx = np.abs(x_grid[...,1] - x_grid[...,0])
     dv_x = np.abs(v[...,1] - v[...,0])
     d_ps = dv_x * dx
+    assert d_ps.ndim == 1
+    new_shape = tuple(d_ps.size if d_ps.size == s else 1 for s in dist_x_px.shape)
     f_v = dist_x_px / d_ps.reshape(
-        (d_ps.shape + ((1,) * (dist_x_px.ndim - d_ps.ndim)))
+        new_shape # (d_ps.shape + ((1,) * (dist_x_px.ndim - d_ps.ndim)))
     )
     return v, f_v
 
@@ -468,3 +470,195 @@ def estimateFrequency(
     k = 2 * np.pi * np.argmax(mean_fft, axis=-1) / (dx * N)
     k_sys_err = np.pi / (dx * N)
     return k, k_sys_err
+
+import numpy as np
+
+def subpixelPeak3dSpectrum(P, omega, kx, ky, reg_size):
+    """
+    Subpixel 3D quadratic peak interpolation for a 3D power spectrum P(kx, ky, omega).
+
+    Args:
+        P: 3D Power spectrum with shape (Nt, Nx, Ny)
+        omega, kx, ky: 1D Coordinate axes corresponding to P
+        reg_size: Size of the region around argmax which is considered.
+
+    Returns
+    -------
+    omega_peak, kx_peak, ky_peak, std_omega, std_kx, std_ky: floats
+        Subpixel-interpolated location of the spectral peak
+    """
+
+    # 1. Find integer-grid maximum index
+    idx = np.unravel_index(np.argmax(P), P.shape)
+    i, j, k = idx
+
+    # Guard: cannot interpolate on edges
+    if (
+        i == 0 or i == P.shape[0]-1
+        or j == 0 or j == P.shape[1]-1
+        or k == 0 or k == P.shape[2]-1
+    ): return omega[i], kx[j], ky[k]
+
+    # Coordinates around peak (central finite difference grid)
+    # relative coordinates: -1, 0, +1
+    idx_grid = np.arange(-reg_size, reg_size+1)
+    X, Y, Z = np.meshgrid(idx_grid, idx_grid, idx_grid, indexing="ij")
+    X = X.ravel()
+    Y = Y.ravel()
+    Z = Z.ravel()
+
+    # Values around peak
+    P_local = P[
+        i-reg_size:i+reg_size+1,
+        j-reg_size:j+reg_size+1,
+        k-reg_size:k+reg_size+1,
+    ].ravel()
+
+    # Construct design matrix for quadratic fit:
+    # f = ax x^2 + ay y^2 + az z^2 + bx x + by y + bz z + c
+    A = np.column_stack([
+        X*X, Y*Y, Z*Z,
+        X, Y, Z,
+        np.ones_like(X)
+    ])
+
+    # Solve least squares for quadratic coefficients
+    coeffs, residuals, rank, s = np.linalg.lstsq(A, P_local, rcond=None)
+
+    ax, ay, az, bx, by, bz, c = coeffs
+
+    # 2. Compute subpixel peak = stationary point of gradient of paraboloid
+    # ∂f/∂x = 2 a_x x + b_x = 0 → x_peak = -b_x/(2a_x)
+    # (same for y, z)
+    def safe_peak(b, a):
+        if a == 0:
+            return 0.0
+        return -b / (2*a)
+
+    dx = safe_peak(bx, ax)
+    dy = safe_peak(by, ay)
+    dz = safe_peak(bz, az)
+
+    # Limit subpixel shifts to [-1,1] (fit region)
+    dx = np.clip(dx, -reg_size, reg_size)
+    dy = np.clip(dy, -reg_size, reg_size)
+    dz = np.clip(dz, -reg_size, reg_size)
+
+    # 3. Convert shift from index-space to physical coordinates
+    dw  = omega[1] - omega[0]
+    dkx = kx[1] - kx[0]
+    dky = ky[1] - ky[0]
+
+    w_peak  = abs(omega[i] + dx * dw)
+    kx_peak = abs(kx[j] + dy * dkx)
+    ky_peak = abs(ky[k] + dz * dky)
+
+    # Error calculations
+    # Estimate noise variance
+    if len(P_local) > len(coeffs):
+        sigma2 = residuals[0] / (len(P_local)-len(coeffs))
+    else:
+        sigma2 = np.var(P_local - A @ coeffs)
+
+    # Covariance matrix of parameters
+    # C = sigma^2 (A^T A)^{-1}
+    ATA_inv = np.linalg.inv(A.T @ A)
+    C = sigma2 * ATA_inv
+
+    dxdax =  bx/(2*ax**2)
+    dxdbx = -1/(2*ax)
+
+    var_x = (dxdax**2)*C[0,0] + (dxdbx**2)*C[3,3] + 2*dxdax*dxdbx*C[0,3]
+    var_y = ( (by/(2*ay**2))**2 *C[1,1] +
+              (-1/(2*ay))**2*C[4,4] +
+              2*(by/(2*ay**2))*(-1/(2*ay))*C[1,4] )
+    var_z = ( (bz/(2*az**2))**2 *C[2,2] +
+              (-1/(2*az))**2*C[5,5] +
+              2*(bz/(2*az**2))*(-1/(2*az))*C[2,5] )
+
+    sigma_omega  = np.sqrt(var_x + 1 / 4) * abs(dw)
+    sigma_kx = np.sqrt(var_y + 1 / 4) * abs(dkx)
+    sigma_ky = np.sqrt(var_z + 1 / 4) * abs(dky)
+    return w_peak, kx_peak, ky_peak, sigma_omega, sigma_kx, sigma_ky
+
+
+def extractWaveProperties(info: RunInfo, files: list[Path]) -> dict[str,np.ndarray]:
+    """Estimate all wave protperites (incl. theta) with errors from the
+    simulations of given files.
+
+    Args:
+        files: The HDF5-files that contain the simulation results.
+
+    Returns:
+        A dictionary with wave properties and errors by u_alpha.
+    """
+    wave = {k: [] for k in ['u_alpha', 'k', 'omega', 'theta', 'k_err', 'omega_err', 'theta_err', 'theta_rms', 'theta_rms_err']}
+    for file_idx, filename in enumerate(files):
+        flow_velocity = int(filename.stem[-3:])
+        wave['u_alpha'].append(flow_velocity)
+        with h5py.File(filename) as f:
+            E_x = f['Electric Field/ex'][1:]
+            E_y = f['Electric Field/ey'][1:]
+            time = f["Header/time"][1:] * info.omega_pp
+            x = f["Grid/grid/X"] / info.lambda_D_electron
+            y = f["Grid/grid/Y"] / info.lambda_D_electron
+            if x.ndim > 1:
+                assert np.all(x == x[0]) and np.all(y == y[0])
+                x = x[0]
+                y = y[0]
+        
+        res = fitGrowthRate(
+            time,
+            np.mean(E_x ** 2 + E_y ** 2, axis=(1,2)),
+            allowed_slope_deviation=0.5,
+        )
+        regime = slice(res[1][-1])
+        
+        E = E_x[regime] + 1j * E_y[regime]
+        E_k_omega = np.fft.fftn(E, axes=(0,1,2))
+        P = np.fft.fftshift(np.abs(E_k_omega)**2, axes=(0,1,2))
+        
+        Nt, Nx, Ny = E.shape
+        dt, dx, dy = time[1]-time[0], x[1]-x[0], y[1]-y[0]
+        omega = np.fft.fftshift(np.fft.fftfreq(Nt, d=dt)) * 2 * np.pi
+        kx = np.fft.fftshift(np.fft.fftfreq(Nx, d=dx)) * 2 * np.pi
+        ky = np.fft.fftshift(np.fft.fftfreq(Ny, d=dy)) * 2 * np.pi
+    
+        # theta from E_rms
+        E_rms_x = np.sqrt(np.mean(E_x[regime] ** 2))
+        E_rms_x_err = np.std(E_x[regime])  / np.sqrt(E_x.size)
+        E_rms_y = np.sqrt(np.mean(E_y[regime] ** 2))
+        E_rms_y_err = np.std(E_y[regime]) / np.sqrt(E_y.size)
+        theta_max = np.arctan(abs(E_rms_y) / abs(E_rms_x))
+        theta_err = np.sqrt(
+            (E_rms_y / (E_rms_x ** 2 + E_rms_y ** 2)) ** 2 * E_rms_x_err ** 2 +
+            (E_rms_x / (E_rms_x ** 2 + E_rms_y ** 2)) ** 2 * E_rms_y_err ** 2
+        )
+        wave['theta_rms'].append(theta_max)
+        wave['theta_rms_err'].append(theta_err)
+    
+        # wave properties with sub-pixel resolution estimates
+        (
+            omega_max,
+            kx_max,
+            ky_max,
+            sigma_omega,
+            sigma_kx,
+            sigma_ky,
+        ) = subpixelPeak3dSpectrum(P, omega, kx, ky, reg_size=1)
+        theta_max = np.arctan(abs(ky_max) / abs(kx_max))
+        theta_err = np.sqrt(
+            (ky_max / (kx_max ** 2 + ky_max ** 2)) ** 2 * sigma_kx ** 2 +
+            (kx_max / (kx_max ** 2 + ky_max ** 2)) ** 2 * sigma_ky ** 2
+        )
+        k_max = np.linalg.norm([kx_max, ky_max])
+        k_err = np.linalg.norm(k_max * np.array([sigma_kx, sigma_ky]) / np.linalg.norm(k_max))
+        wave['omega'].append(omega_max)
+        wave['omega_err'].append(sigma_omega)
+        wave['k'].append(k_max)
+        wave['k_err'].append(k_err)
+        wave['theta'].append(theta_max)
+        wave['theta_err'].append(theta_err)
+    
+    wave = {k: np.array(v) for k, v in wave.items()}
+    return wave

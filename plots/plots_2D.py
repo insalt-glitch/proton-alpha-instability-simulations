@@ -106,6 +106,10 @@ def _anglesForAlphaFlowSpeed(info: RunInfo, e_field_component: str):
         with h5py.File(filename) as f:
             x = f["Grid/grid/X"][:] / info.lambda_D
             y = f["Grid/grid/Y"][:] / info.lambda_D
+            if x.ndim > 1:
+                assert np.all(x == x[0]) and np.all(y == y[0])
+                x = x[0]
+                y = y[0]
             E_x = f['Electric Field/ex'][:]
             E_y = f['Electric Field/ey'][:]
             time = f["Header/time"][:] * info.omega_pp
@@ -113,6 +117,11 @@ def _anglesForAlphaFlowSpeed(info: RunInfo, e_field_component: str):
         assert res is not None, "What?"
         linear_idx = res[1]
         E_field = E_x[slice(*linear_idx)] if e_field_component == "x" else E_y[slice(*linear_idx)]
+        # print(filename)
+        # print(x.shape, y.shape)
+        # print(E_x.shape, E_y.shape)
+        # print(time.shape)
+        # continue
         k, k_err = analysis.waveVector2D(x, y, E_field)
         arr_theta[file_idx], arr_theta_err[file_idx] = analysis.waveAngle2DFromWaveVector(k, k_err)
 
@@ -155,7 +164,7 @@ def waveAngleVsAlphaFlowSpeed(info: RunInfo, e_field_component: str, save: bool=
     )
     plt.xlabel("Flow velocity $u_{\\alpha}$ (km$\\,/\\,$s)")
     plt.ylabel("Wave angle $\\theta$ (deg)")
-    plt.xlim(95, 190)
+    plt.xlim(90, 190)
     plt.yticks(np.linspace(0, 75, num=6))
     plt.ylim(-2, 75)
     plt.legend(markerscale=0.8, fancybox=False, framealpha=1.0, edgecolor="black")
@@ -209,11 +218,16 @@ def electricField2DSnapshot(filename: Path, info: RunInfo, time: float|int, save
             time_step = time
         x = f["Grid/grid/X"] / info.lambda_D
         y = f["Grid/grid/Y"] / info.lambda_D
+        if x.ndim > 1:
+            assert np.all(x == x[0]) and np.all(y == y[0])
+            x = x[0]
+            y = y[0]
         E_x = f['Electric Field/ex'][time_step]
     E_x_max = np.max(np.abs(E_x))
     plt.style.use(MPLSTYLE_FILE)
     plt.figure(figsize=FIGURE_FULL_SIZE)
-    plt.pcolormesh(x, y, E_x.T, cmap="bwr", rasterized=True, vmin=-0.8, vmax=0.8)
+    print(np.percentile(np.abs(E_x), 99))
+    plt.pcolormesh(x, y, E_x.T, cmap="bwr", rasterized=True, vmin=-0.35, vmax=0.35)
     plt.xlabel("Position x$\\,/\\,\\lambda_\\text{D}$ (1)")
     plt.ylabel("Position y$\\,/\\,\\lambda_\\text{D}$ (1)")
     plt.xticks(np.linspace(0, 64, num=5))
@@ -222,7 +236,7 @@ def electricField2DSnapshot(filename: Path, info: RunInfo, time: float|int, save
     divider = make_axes_locatable(plt.gca())
     cax: plt.Axes = divider.append_axes("right", size="5%", pad=0.05)
     plt.colorbar(label="Electric field E$_x$ (V/m)", cax=cax)
-    cax.set_yticks(np.linspace(-0.8, 0.8, num=5))
+    cax.set_yticks(np.linspace(-0.35, 0.35, num=5))
     plt.tight_layout()
     if save:
         _saveFigure(f"electric_field_2d-idx_t={time_step}", "alpha_flow_velocity_variation")
@@ -336,7 +350,7 @@ def omegaVsAlphaFlowSpeed(info: RunInfo, save: bool=False):
     )
     plt.ylim(0.2, 0.9)
     low, high = plt.gca().get_ylim()
-    plt.xlim(95, 185)
+    plt.xlim(90, 185)
     plt.ylim(low, high)
     plt.xlabel(f"Flow velocity $u_\\alpha^{{t=0}}$ (km$\\,/\\,$s)")
     plt.ylabel(f"Frequency $\\omega_\\text{{max}}\\,/\\,\\omega_\\text{{pp}}$ (1)")
@@ -356,6 +370,10 @@ def wavenumberVsAlphaFlowSpeed(info: RunInfo, save: bool=False):
         with h5py.File(filename) as f:
             x = f["Grid/grid/X"][:] / info.lambda_D
             y = f["Grid/grid/Y"][:] / info.lambda_D
+            if x.ndim > 1:
+                assert np.all(x == x[0]) and np.all(y == y[0])
+                x = x[0]
+                y = y[0]
             E_x = f['Electric Field/ex'][1:]
             E_y = f['Electric Field/ey'][1:]
             time = f["Header/time"][1:] * info.omega_pp
@@ -395,7 +413,7 @@ def wavenumberVsAlphaFlowSpeed(info: RunInfo, save: bool=False):
     )
     plt.ylim(bottom=0.2)
     low, high = plt.gca().get_ylim()
-    plt.xlim(95, 185)
+    plt.xlim(90, 185)
     plt.ylim(low, high)
     plt.xlabel(f"Flow velocity $u_\\alpha^{{t=0}}$ (km$\\,/\\,$s)")
     plt.ylabel(f"Wave number $k_\\text{{max}}\\,\\lambda_\\text{{D}}$ (1)")
@@ -744,6 +762,11 @@ def _loadPxPyDistribution(
         sim_time = sim_time[t_idx]
         x_grid = f[f"Grid/grid/X"][:]
         y_grid = f[f"Grid/grid/Y"][:]
+        if x_grid.ndim > 1:
+                assert np.all(x_grid == x_grid[0]) and np.all(y_grid == y_grid[0])
+                x_grid = x_grid[0]
+                y_grid = y_grid[0]
+        
         px_grid = f[f"Grid/px_py/{species}/Px"]
         if px_grid.ndim > 1:
             px_grid = f[f"Grid/px_py/{species}/Px"][t_idx]
@@ -951,13 +974,20 @@ def _pxPyDistSubplot(fig, ax: plt.Axes, info: RunInfo, filename: Path, species: 
         0 if species == Species.PROTON else u_alpha * 1e3 / info.alpha.v_thermal, 0,
         marker="o", markeredgecolor="black", markeredgewidth=1, color="white")
     with h5py.File(filename) as f:
-        sim_time = f['Header/time'][:]
+        sim_time = f['Header/time'][:] * info.omega_pp
         time_idx = np.argmin(np.abs(sim_time - time))
-        Ex = f['Electric Field/ex'][time_idx]
-        Ey = f['Electric Field/ey'][time_idx]
+        Ex = f['Electric Field/ex'][:time_idx+1]
+        Ey = f['Electric Field/ey'][:time_idx+1]
         x = f['Grid/grid/X'][:]
         y = f['Grid/grid/Y'][:]
-    phi = np.max(np.abs(potentialFromElectricField(Ex, Ey, x, y)))
+        if x.ndim > 1:
+                assert np.all(x == x[0]) and np.all(y == y[0])
+                x = x[0]
+                y = y[0]
+    # phi = np.percentile(np.abs(potentialFromElectricField(Ex[:-1], Ey[:-1], x, y)), 99.9)
+    phi = np.max(np.abs(potentialFromElectricField(Ex[:-1], Ey[:-1], x, y)))
+    Ex = Ex[time_idx]
+    Ey = Ey[time_idx]
     with h5py.File(THEORY_U_ALPHA_FILE) as f:
         theory_v = f["u_alpha_bulk"][:] / 1e3
         theory_k = f["k_max"][:]
@@ -1020,6 +1050,7 @@ def _pxPyDistSubplot(fig, ax: plt.Axes, info: RunInfo, filename: Path, species: 
             use_gridspec=False,
             shrink=0.92 if species == Species.PROTON else 0.83
         )
+    ax.set_facecolor(plt.get_cmap('viridis').get_under())
     ax.set(
         xlim = xlim,
         ylim = ylim,

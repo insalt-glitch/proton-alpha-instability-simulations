@@ -282,18 +282,23 @@ def _parseComandlineArgs() -> argparse.Namespace:
         help="Target/Output file.",
         # type=_validateSrcFile
     )
+    parser.add_argument(
+        "--constant-grid",
+        help="The same grid is used for all timesteps",
+        action="store_true",
+    )
     parser.add_argument_group()
     group = parser.add_mutually_exclusive_group()
     group.title = "Target-file options"
     group.add_argument(
         "--overwrite-target",
         help="Overwrite existing target-files.",
-        action="store_true"
+        action="store_true",
     )
     group.add_argument(
         "--skip-existing",
         help="Skip existing target-files.",
-        action="store_true"
+        action="store_true",
     )
     parser.add_argument(
         "PATH",
@@ -341,7 +346,7 @@ def _prepareFiles(args: argparse.Namespace) -> tuple[list[list[Path]],list[Path]
         sorted(folder.glob("*.h5")) for folder in set(src_dirs) if len(list(folder.glob("*.h5"))) > 1
     ]
     target_files = [
-        file_batch[0].parent / f"{file_batch[0].parent.name}.h5"
+        file_batch[0].parent.with_suffix(".h5")
         for file_batch in src_files
     ]
     # check conformity with arguments
@@ -362,6 +367,8 @@ def _prepareFiles(args: argparse.Namespace) -> tuple[list[list[Path]],list[Path]
 
 if __name__ == "__main__":
     args = _parseComandlineArgs()
+    if args.constant_grid:
+        CONSTANT_GROUPS.append("/Grid/grid")
     src_folders, target_files, reference_files = _prepareFiles(args)
     assert len(src_folders) == len(target_files)
     assert len(src_folders) == len(reference_files)
