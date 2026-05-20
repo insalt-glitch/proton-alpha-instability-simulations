@@ -23,7 +23,7 @@ For clarity in a separate section, the information conndensed from ***How to use
 1. Download all `tar`-archives from the zenodo repository.
 2. Install [pixi](https://pixi.prefix.dev)
 3. In `basic/paths.py` change the `RESULTS_FOLDER` variable to the directory of you're choosing. In the following, this directory is denoted as `<results-directory>`
-4. Exectue the following commands:
+4. Execute the following commands:
 ```(bash)
 cd <this-directory>
 pixi init

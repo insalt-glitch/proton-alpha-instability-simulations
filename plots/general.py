@@ -121,6 +121,10 @@ def _loadSpaceMomDistribution(
             x_grid = f["Grid/grid"][:]
         if is_2d_simulation:
             y_grid = f[f"Grid/grid/Y"][:]
+        if x_grid.ndim > 1:
+            assert np.all(x_grid == x_grid[0]) and np.all(y_grid == y_grid[0])
+            x_grid = x_grid[0]
+            y_grid = y_grid[0]
         mom_grid = f[f"Grid/{dist}/{species}/{dist.momentum()}"]
         if mom_grid.ndim > 1:
             mom_grid = np.squeeze(mom_grid[t_idx])
@@ -367,7 +371,7 @@ def videoMomentumDistribution(
             info, species, file, dist_type, time_steps, normalized_velocity,
         )
         f_v = np.mean(f_v, axis=1)
-        non_zero_v = v[np.nonzero(np.sum(f_v, axis=0)>0)]
+        non_zero_v = v[:,np.nonzero(np.sum(f_v, axis=0)>0)]
         vs.append(v)
         f_vs.append(f_v)
         v_limits.append([np.min(non_zero_v), np.max(non_zero_v)])

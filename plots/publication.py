@@ -9,7 +9,10 @@ from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
 from matplotlib.legend_handler import HandlerTuple
+from matplotlib.animation import FuncAnimation
+import matplotlib.ticker as ticker
 from scipy import constants
+from scipy.interpolate import NearestNDInterpolator
 
 import analysis
 from basic import RunInfo, physics, Species, SpeciesInfo
@@ -22,6 +25,7 @@ from basic.paths import (
 )
 from .plots_1D import runInfoForDenistyRatio
 from .plots_2D import _loadPxPyDistribution, potentialFromElectricField
+from .settings import VIDEO_FORMAT, VIDEO_DPI
 
 PIC_FILES_PREV = sorted(list(
     V_FLOW_VARIATION_FOLDER.glob("*.h5")),
@@ -154,13 +158,21 @@ def flowVelocityWavePropsMosaic(info: RunInfo, pic_wave_props):
             s=rf"({chr(ord('a')+i)})",
             transform=ax.transAxes
         )
-    for ax in axes[0]:
+        ax.axvline(140 / u_crit, ls=":", color="#999999", zorder=1)
+    for i, ax in enumerate(axes.flatten()):
         ax.tick_params(top=False)
-        ax_secondary = ax.secondary_xaxis('top', functions=(lambda x: x * vel_norm, lambda x: x / vel_norm))
-        ax_secondary.set(
-            xlabel=r'Flow velocity $u_\alpha^{t=0}$ (km$\,/\,$s)',
-            xticks=np.arange(100, 202, 20),
-        )
+        ax_secondary = ax.secondary_xaxis('top', functions=(lambda x: x * vel_norm, lambda x: x / vel_norm), facecolor="red")
+        ax_secondary.set(xticks=np.arange(100, 202, 20))
+        if i < 2:
+            ax_secondary.set(
+                xlabel=r'Flow velocity $u_\alpha^{t=0}$ (km$\,/\,$s)',
+            )
+        else:
+            ax_secondary.xaxis.set_major_formatter(ticker.NullFormatter())
+        # ax_secondary.spines['bottom'].set_color('red')
+        ax.spines['top'].set_color('red')
+        ax_secondary.xaxis.label.set_color('red')
+        ax_secondary.tick_params(axis='x', colors='red')
 
 def electricField2DSnapshot(ax, flow_velocity: int, info: RunInfo, time: float|int, limit: float):
     filename = next(V_FLOW_VARIATION_FOLDER.glob(f"*{flow_velocity}.h5"))
@@ -240,7 +252,7 @@ def energyEFieldOverTime(ax, velocity: int, info: RunInfo, show_fit_details):
     )
     ax.legend()
 
-def speciesTemperatureOverTime(ax, species, info):
+def speciesTemperatureOverTime(ax, species: Species, info):
     files = sorted(V_FLOW_VARIATION_FOLDER.glob("*.h5"))
     for filename in files:
         u_alpha = int(filename.stem[-3:])
@@ -253,13 +265,12 @@ def speciesTemperatureOverTime(ax, species, info):
             x_grid = f[f"Grid/x_px/{species.value}/X"][:]
             px_grid = f[f"Grid/x_px/{species.value}/Px"][:]
             py_grid = f[f"Grid/x_py/{species.value}/Py"][:]
-            temp_3d = physics.kelvinToElectronVolt(np.mean(f[f'Derived/Temperature/{species.value}'][:], axis=(1,2)))
-        
+            T_3d = physics.kelvinToElectronVolt(
+                np.mean(f[f"Derived/Temperature/{species.value}"], axis=(1,2))
+            )
         time *= info.omega_pp
         t_x = analysis.temperature1D(x_grid, px_grid, px_dist, info[species])
         t_y = analysis.temperature1D(x_grid, py_grid, py_dist, info[species])
-        temp_3d = (t_x + 2 * t_y) / 3 # Plot t_x + 2 * t_y instead
-        temp_3d = np.convolve(temp_3d, np.ones(40)/40, mode='valid')
         t_x = np.convolve(t_x, np.ones(40)/40, mode='valid')
         t_y = np.convolve(t_y, np.ones(40)/40, mode='valid')
         time = time[20:-19]
@@ -269,12 +280,11 @@ def speciesTemperatureOverTime(ax, species, info):
         else:
             color='cornflowerblue'
         t_norm = 1# info[species].temperature
-        ax.plot(time, t_x / t_norm, label=f"$T_{{x}}$", ls='--', color=color)
-        ax.plot(time, t_y / t_norm, label=f"$T_{{y}}$", ls=':', color=color)
-        ax.plot(time, temp_3d / t_norm, label=rf"$\tilde{{T}}$", ls='-', color=color)
+        ax.plot(time, t_x / t_norm, label="$T_{x}$", ls='-', color=color)
+        ax.plot(time, t_y / t_norm, label="$T_{y}$", ls='--', color=color)
     ax.set(
         xlim=(0, 150),
-        ylabel=rf'Temperature $T_{{{species.symbol()}}}$ (eV)'
+        ylabel=rf'$T_{{{species.symbol()}}}$ (eV)',
     )
     def conv(t):
         def f(x):
@@ -285,14 +295,14 @@ def speciesTemperatureOverTime(ax, species, info):
             return x * t
         return f
     ax_extra = ax.secondary_yaxis('right', functions=(conv(info[species].temperature), conv_inv(info[species].temperature)))
-    ax_extra.set_ylabel(rf'Normalized $T_{{{species.symbol()}}}\,/\,T_{{{species.symbol()}}}^{{t=0}}$')
+    ax_extra.set_ylabel(rf'$T_{{{species.symbol()}}}\,/\,T_{{{species.symbol()}}}^{{t=0}}$')
     return ax_extra
 
 def temperatureElectricFieldMosaic(info):
     time = 55.0
     limit= 0.6
     fig = plt.figure(figsize=(6.8, 6.4), constrained_layout=True)
-    outer_grid = GridSpec(1, 2, figure=fig, width_ratios=[1, 1.3], wspace=0)
+    outer_grid = GridSpec(1, 3, figure=fig, width_ratios=[1, 0.05, 1.3], wspace=0)
     # ------- left subplot -------- 
     left_gs = GridSpecFromSubplotSpec(
         3, 1,
@@ -304,27 +314,26 @@ def temperatureElectricFieldMosaic(info):
     ax_3 = fig.add_subplot(left_gs[2])
     ax = np.array([ax_1, ax_2, ax_3])
     plt.setp(ax[0].get_xticklabels(), visible=False)
-    # fig, ax = plt.subplots(2,1, sharex=True, height_ratios=[40 * 1.11, 56], constrained_layout=True)
     _ = electricField2DSnapshot(ax[0], 95, info, time, limit)
     mesh = electricField2DSnapshot(ax[1], 140, info, time, limit)
     ax[0].text(
         0.05, 0.95,
         horizontalalignment='left', verticalalignment='top',
-        s=rf"a) $u_\alpha=95\,$km$\,/\,$s", # $t\\,\\omega_\\text{{pp}}=\\,${time:.0f}",
+        s=rf"a) $u_\alpha=95\,$km$\,/\,$s",
         transform=ax[0].transAxes,
         bbox=dict(facecolor='white', alpha=0.5)
     )
     ax[1].text(
         0.05, 0.95,
         horizontalalignment='left', verticalalignment='top',
-        s=rf"b) $u_\alpha=140\,$km$\,/\,$s", #$t\\,\\omega_\\text{{pp}}=\\,${time:.0f}",
+        s=rf"b) $u_\alpha=140\,$km$\,/\,$s",
         transform=ax[1].transAxes,
         bbox=dict(facecolor='white', alpha=0.5)
     )
     
     divider = make_axes_locatable(ax[0])
     cax: plt.Axes = divider.append_axes("top", size="7%", pad=0.05)
-    plt.colorbar(mesh, label="Electric field E$_x$ (V/m)", cax=cax, orientation='horizontal', location='top')
+    plt.colorbar(mesh, label=r"Electric field E$_x$ (V/m)", cax=cax, orientation='horizontal', location='top')
     cax.set_xticks(np.linspace(-limit, limit, num=5))
     ax[1].set_xlabel(r"Position x$\,/\,\lambda_\text{D}$")
     energyEFieldOverTime(ax[2], 140, info, False)
@@ -343,13 +352,13 @@ def temperatureElectricFieldMosaic(info):
     )
     
     # ------- right subplot --------
-    right_gs = GridSpecFromSubplotSpec(3, 1, subplot_spec=outer_grid[1])
+    right_gs = GridSpecFromSubplotSpec(3, 1, subplot_spec=outer_grid[2])
     ax1 = fig.add_subplot(right_gs[0])
     ax2 = fig.add_subplot(right_gs[1], sharex=ax1)
     ax3 = fig.add_subplot(right_gs[2], sharex=ax1)
     axes = np.array([ax1, ax2, ax3])
     plt.setp(ax1.get_xticklabels(), visible=False)
-    plt.setp(ax2.get_xticklabels(), visible=False)
+    plt.setp(ax2.get_xticklabels(), visible=False)  
     for ax, species in zip([ax1, ax2, ax3], [Species.ELECTRON, Species.PROTON, Species.ALPHA]):
         ax_extra = speciesTemperatureOverTime(ax, species, info)
         h, l = ax.get_legend_handles_labels()
@@ -364,12 +373,13 @@ def temperatureElectricFieldMosaic(info):
                 ]
                 l1 = ax.legend(handles=custom_handles, loc=(0.25, 0.6), frameon=False,
                                labelspacing=0.1, edgecolor='black', borderpad=0.2)
-                l2 = ax.legend(h[:3], l[:3], loc=(0.1, 0.26), frameon=False, 
+                l2 = ax.legend(h[:2], l[:2], loc=(0.1, 0.26), frameon=False, 
                                labelspacing=0.1, edgecolor='black', borderpad=0.2)
                 ax.add_artist(l1)
                 ax.add_artist(l2)
             case Species.PROTON:
                 text = '(e) Protons'
+                ax.set_yticks(np.arange(3, 19, 3))
                 ax_extra.set_yticks(np.arange(1, 7, 1))
                 pass
             case Species.ALPHA:
@@ -383,7 +393,10 @@ def temperatureElectricFieldMosaic(info):
             s=text,
             transform=ax.transAxes
         )
-    ax3.set(xlabel="Time $t\\,\\omega_\\text{pp}$",)
+    ax3.set(xlabel="Time $t\\,\\omega_\\text{pp}$")
+    patch = Rectangle([0.438, 0], 0.006, 1.05, hatch='/////', ls='', facecolor='white',)
+    fig.text(0.64, 0.99, "$\\it{Temperatures}$\n", fontsize=10)
+    fig.add_artist(patch)
 
 def velocitySpaceGeometry(ax, u_alpha, label_prefix):
     v_ph = 69
@@ -467,27 +480,28 @@ def velocitySpaceGeometry(ax, u_alpha, label_prefix):
         )
     # arrows (interaction)
     if u_alpha > u_crit:
-        delta = 120
+        delta = 140
     else:
-        delta = 60
+        delta = 70
+    d_center = 3
     ann = ax.annotate(
         text='', xy=(
-            (v_ph - width/2 - 3) * np.cos(theta) + np.sin(theta) * delta,
-            (v_ph - width/2 - 3) * np.sin(theta) - np.cos(theta) * delta
+            (v_ph - width/2 - d_center) * np.cos(theta) + np.sin(theta) * delta,
+            (v_ph - width/2 - d_center) * np.sin(theta) - np.cos(theta) * delta
         ),
         xytext=(
-            (v_ph + width/2 + 3) * np.cos(theta) + np.sin(theta) * delta,
-            (v_ph + width/2 + 3) * np.sin(theta) - np.cos(theta) * delta
+            (v_ph + width/2 + d_center) * np.cos(theta) + np.sin(theta) * delta,
+            (v_ph + width/2 + d_center) * np.sin(theta) - np.cos(theta) * delta
         ), arrowprops=dict(arrowstyle='<->', lw=2, color="#693a00")
     )
     ann = ax.annotate(
         text='', xy=(
-            (v_ph - width/2 - 3) * np.cos(theta) + np.sin(theta) * delta,
-            -(v_ph - width/2 - 3) * np.sin(theta) + np.cos(theta) * delta
+            (v_ph - width/2 - d_center) * np.cos(theta) + np.sin(theta) * delta,
+            -(v_ph - width/2 - d_center) * np.sin(theta) + np.cos(theta) * delta
         ),
         xytext=(
-            (v_ph + width/2 + 3) * np.cos(theta) + np.sin(theta) * delta,
-            -(v_ph + width/2 + 3) * np.sin(theta) + np.cos(theta) * delta
+            (v_ph + width/2 + d_center) * np.cos(theta) + np.sin(theta) * delta,
+            -(v_ph + width/2 + d_center) * np.sin(theta) + np.cos(theta) * delta
         ), arrowprops=dict(arrowstyle='<->', lw=2, color="#693a00")
     )
     ax.text(
@@ -512,7 +526,7 @@ def velocitySpaceGeometry(ax, u_alpha, label_prefix):
     )
 
 def geometryParticleTransport(info):
-    fig = plt.figure(figsize=(6, 5.6), constrained_layout=True)
+    fig = plt.figure(figsize=(7, 6.4), constrained_layout=True)
     grid = GridSpec(2, 2, figure=fig, height_ratios=[0.7,1])
     ax1 = fig.add_subplot(grid[1, 0])
     axes = np.array([ax1, fig.add_subplot(grid[1, 1], sharey=ax1)])
@@ -536,8 +550,8 @@ def geometryParticleTransport(info):
         xlabel=r"Flow velocity $u_\alpha\,/\,u_\alpha^\text{(crit)}$", 
     )
     [h, l] = ax.get_legend_handles_labels()
-    legend1 = ax.legend(h[:2], l[:2], loc="upper right", labelspacing=0, borderaxespad=0.6)
-    ax.legend(h[2:], l[2:], loc=(0.43, 0.15), labelspacing=0.1)
+    legend1 = ax.legend(h[:2], l[:2], loc=(0.35,0.72), labelspacing=0, borderaxespad=0.6)
+    ax.legend(h[2:], l[2:], loc=(0.48, 0.15), labelspacing=0.1)
     ax.add_artist(legend1)
     ax.tick_params(top=False)
     ax_secondary = ax.secondary_xaxis('top', functions=(lambda x: x * u_crit, lambda x: x / u_crit))
@@ -559,8 +573,8 @@ def geometryParticleTransport(info):
             axes[0].scatter(1e3, 1e3, c='#693a00', marker='$⟷$', s=300)
         ])[i] for i in (4,5,3,2,0,1)],
         [(l+["$\\mathbf{v}_\\text{ph}$", r"$\partial_t f_s$"])[i] for i in (4,5,3,2,0,1)],
-        ncols=1, labelspacing=0.1, loc=(0.425,0.11),
-        columnspacing=0.5, borderaxespad=0.8, framealpha=0.8, fontsize=9)
+        ncols=1, labelspacing=0.1, loc=(0.425,0.1),
+        columnspacing=0.5, borderaxespad=0.8, framealpha=0.9, fontsize=9)
     
 
 def heatingVsFlowVelocity(ax, species: Species, info: RunInfo, vel_norm, normalize_temperature):
@@ -603,31 +617,29 @@ def heatingVsFlowVelocity(ax, species: Species, info: RunInfo, vel_norm, normali
 def eFieldVsFlowVelocity(ax, info, vel_norm, sim_style, cap_style):
     files = PIC_FILES_PREV
     velocity = np.empty(len(files))
-    E_max = np.empty(len(files))
-    E_max_err = np.empty(len(files))
+    E_rms_max = np.empty(len(files))
+    E_rms_max_err = np.empty(len(files))
     for file_idx, filename in enumerate(files):
         velocity[file_idx] = int(filename.stem[-3:])
         with h5py.File(filename) as f:
             E_x = f['Electric Field/ex'][:]
             E_y = f['Electric Field/ey'][:]
-        # print(int(filename.stem[-3:]), np.max(np.sqrt(E_x ** 2 + E_y ** 2)))
         E = np.mean(np.sqrt(E_x ** 2 + E_y ** 2), axis=(1,2))
         max_idx = np.argmax(E)
         max_range = E[max_idx-5:max_idx+5]
-        E_max[file_idx] = np.mean(max_range)
-        E_max_err[file_idx] = np.std(max_range)
+        E_rms_max[file_idx] = np.mean(max_range)
+        E_rms_max_err[file_idx] = np.std(max_range)
     velocity = np.array(velocity)
-    E_max = np.array(E_max)
-    E_max_err = np.array(E_max_err)
+    E_rms_max = np.array(E_rms_max)
+    E_rms_max_err = np.array(E_rms_max_err)
 
     eb = ax.errorbar(
-        velocity / vel_norm, E_max, yerr=E_max_err, color="white",
-        label='Electric field (PIC)', **sim_style,
+        velocity / vel_norm, E_rms_max, yerr=E_rms_max_err, color="white",
+        label=r'$\max[\langle E\rangle_\mathbf{r}]_t$ (PIC)', **sim_style,
     )
     _ = [cap.set(**cap_style) for cap in eb[1]]
     ax.set(
-        ylabel=(r"$\max[\langle E\rangle_\mathbf{r}]_t$  (V/m)"),
-        # yticks=np.arange(0.3, 0.46, 0.05),
+        ylabel=(r"Field strength $E$  (V/m)"),
     )
     # print(ax.get_ylim())
     ax.legend(fancybox=False, edgecolor="black", markerscale=0.7)
@@ -694,19 +706,24 @@ def theoryWaveProps(ax, info, vel_norm):
     )
 
 def flowVelocityEnergyTransferMosaic(info):
-    vel_norm = 99.12905164474424 # u_crit
+    u_crit = 99.12905164474424 # u_crit
     fig, axes = plt.subplots(2, 2, figsize=(5.5, 5), sharex=True, constrained_layout=True)
     
     for ax_row, normalize_temperature in zip(axes[0:], [False, True]):
         for ax, species in zip(ax_row, [Species.PROTON, Species.ALPHA]):
-            heatingVsFlowVelocity(ax, species, info, vel_norm, normalize_temperature)
-    for ax, species_name in zip(axes[0], ['Protons', 'Alphas']):
+            heatingVsFlowVelocity(ax, species, info, u_crit, normalize_temperature)
+
+    for i, ax in enumerate(axes.flatten()):
         ax.tick_params(top=False)
-        ax_secondary = ax.secondary_xaxis('top', functions=(lambda x: x * vel_norm, lambda x: x / vel_norm))
-        ax_secondary.set(
-            xticks=np.arange(100, 190, 20),
-            xlabel=f"$\\it{{{species_name}}}$\n" + r'Flow velocity $u_\alpha^{t=0}$ (km$\,/\,$s)',
-        )
+        ax_secondary = ax.secondary_xaxis('top', functions=(lambda x: x * u_crit, lambda x: x / u_crit))
+        ax_secondary.set(xticks=np.arange(100, 190, 20))
+        if i < 2:
+            ax_secondary.set(xlabel=r'Flow velocity $u_\alpha^{t=0}$ (km$\,/\,$s)')
+        else:
+            ax_secondary.xaxis.set_major_formatter(ticker.NullFormatter())
+        ax.spines['top'].set_color('red')
+        ax_secondary.xaxis.label.set_color('red')
+        ax_secondary.tick_params(axis='x', colors='red')
     for ax in axes[:,1]:
         ax.yaxis.set_label_position("right")   # move ylabel
         ax.yaxis.tick_right()                  # move tick labels to the right
@@ -718,17 +735,15 @@ def flowVelocityEnergyTransferMosaic(info):
             s=rf"({chr(ord('a')+i)})",
             transform=ax.transAxes
         )
+        ax.axvline(140 / u_crit, ls=":", color="#999999", zorder=1)
     axes[-1,0].set(
         xlim = (0.9, 1.9),
         xticks=np.arange(1, 2.0, 0.2),
-        # ylim=(1.4,None),
     )
     for ax in axes[-1,:]:
         ax.set_xlabel(r"Flow velocity $u_\alpha^{t=0}\,/\,u_\alpha^\text{(crit)}$")
-    axes[0,0].set_ylim(1.36, None)
-    axes[0,0].set_ylabel("$\\it{Temperature}$\n" + axes[0,0].get_ylabel())
-    axes[1,0].set_ylabel("$\\it{Kinetic}$ $\\it{energy}$\n" + axes[1,0].get_ylabel())
-    fig.text(0, 0.5, r"$\it{Normalization}$", va='center', ha='right', rotation=90)
+    fig.text(0.31, 1, r"$\it{Protons}$", va='bottom', ha='center')
+    fig.text(0.7, 1, r"$\it{Alphas}$", va='bottom', ha='center')
 
 def convergenceFrequency(ax, info):
     time, (E_fields,), folders = analysis.readFromVariation(
@@ -1062,8 +1077,6 @@ def vxVyDistSubplot(ax: plt.Axes, info: RunInfo, filename: Path, species: Specie
     #     v_ph = (wave_omega / wave_k) / info[species].v_thermal
     #     theta = wave_theta
     
-    print(v_ph * info[species].v_thermal, v_trap * info[species].v_thermal)
-    
     rect_pos = plt.Rectangle(
         xy=(
             (v_ph - v_trap) * np.cos(theta) + np.sin(theta) * (-4 * v_ph),
@@ -1171,6 +1184,114 @@ def distributionsVelocitySpace(info, wave):
     fig.text(0.52, 1, r"$u_\alpha^{t=0}=140\,$km$\,/\,$s", ha='left', va='top')
     fig.add_artist(patch)
 
+
+def pxPyOverviewVideo(
+    info: RunInfo,
+    velocities: list[int],
+    folderpath_save,
+    normalized_velocity=True,
+    time_steps = None,
+):
+    def subplot_setup(ax, v_x, v_y, f_v, species, show_colorbar, vmin=None, vmax=None):
+        prev_xlim = ax.get_xlim()
+        prev_ylim = ax.get_ylim()
+        cmap = plt.colormaps['viridis']
+        cmap.set_bad(cmap(0.0))
+        quad = ax.pcolormesh(v_x[0], v_y[0], f_v[0].T, norm="log", cmap=cmap, shading="nearest")
+        if show_colorbar:
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            fig.colorbar(
+                quad,
+                label=(
+                    f"{species.name[0]}{species.name[1:].lower()} VDF "
+                    rf"$\langle f_{species.symbol()}\rangle_\mathbf{{r}}$ (s$^2\,/\,$m$^4$)"
+                ),
+               cax=cax,
+            )
+        
+        text = plt.text(0.95, 0.95,
+                horizontalalignment='right',
+                verticalalignment='top',
+                s=rf"t$\,\omega_\text{{pp}}=\,${0:>5.1f}",
+                color="white",
+                transform=ax.transAxes,
+        )
+        # set conservative x-axis bounds
+        non_zero_v_x = v_x[:,np.nonzero(np.sum(f_v, axis=(0,2)) > 0)]
+        if prev_xlim[0] == 0:
+            ax.set_xlim(np.min(non_zero_v_x), np.max(non_zero_v_x))
+        else:
+            new_min = min(prev_xlim[0], np.min(non_zero_v_x))
+            new_max = max(prev_xlim[1], np.max(non_zero_v_x))
+            ax.set_xlim(new_min, new_max)
+        # set conservative y-axis bounds
+        non_zero_v_y = v_y[:,np.nonzero(np.sum(f_v, axis=(0,1)) > 0)]
+        if prev_ylim[0] == 0:
+            ax.set_ylim(np.min(non_zero_v_y), np.max(non_zero_v_y))
+        else:
+            new_min = min(prev_ylim[0], np.min(non_zero_v_y))
+            new_max = max(prev_ylim[1], np.max(non_zero_v_y))
+            ax.set_ylim(new_min, new_max)
+        return quad, text
+    selected_files = [
+        fname for fname in sorted(V_FLOW_VARIATION_FOLDER.glob("*.h5"))
+        if int(fname.stem[-3:]) in velocities
+    ]
+    assert len(selected_files) == len(velocities)
+    fig, axes = plt.subplots(len(velocities), 3, figsize=(4 * len(velocities), 12), sharey="row", sharex="row")
+    
+    plot_objects = [] 
+    for col_idx, (ax_col, fname, u_alpha) in enumerate(zip(
+        axes.T, selected_files, velocities
+    )):
+        with h5py.File(fname) as f:
+            time = f["Header/time"][:] * info.omega_pp
+            if time_steps is None:
+                time_steps = range(0, time.size, 3)
+            time = time[time_steps]
+        ax_col[0].set_title(rf"$u_\alpha^{{t=0}}={u_alpha}\,$km$\,/\,$s", fontsize=11)
+        for row_idx, (ax, species) in enumerate(zip(ax_col, Species)):
+            v_x, v_y, f_v = _loadPxPyDistribution(
+                info, species, fname, time_steps, normalized_velocity
+            )
+            
+            quad, text = subplot_setup(ax, v_x, v_y, f_v, species, show_colorbar=u_alpha == velocities[-1])
+            plot_objects.append((quad, text, f_v))
+            if normalized_velocity:
+                ax.set_xlabel(rf"Velocity $v_{{{species.symbol()},x}}\,/\,v^{{t=0}}_{species.symbol()}$")
+                if col_idx == 0:
+                    ax.set_ylabel(
+                        f"$\\it{{{species.name[0]}{species.name[1:].lower()}s}}$"
+                        f"\nVelocity $v_{{{species.symbol()},y}}\\,/\\,v^{{t=0}}_{species.symbol()}$"
+                    )
+            else:
+                ax.set_xlabel(f"Velocity $v_{{{species.symbol()},x}}$ (km/s)")
+                if col_idx == 0:
+                    ax.set_ylabel(f"Velocity $v_{{{species.symbol()},y}}$ (km/s)")
+    tight_bbox = fig.get_tightbbox()
+    fig.set_size_inches(tight_bbox.width, tight_bbox.height)
+    fig.subplots_adjust(left=0.09, bottom=0.06, right=0.91, top=0.94, wspace=0)  
+    
+    def update(frame_idx):
+        artists = tuple()
+        for quad, text, f_v in plot_objects:
+            quad.set_array(f_v[frame_idx].T)
+            text.set_text(rf"t$\,\omega_\text{{pp}}\,=\,${time[frame_idx]:>5.1f}")
+            artists += (quad, text)
+    
+        return artists
+    
+    frames = list(range(len(list(time_steps))))
+    ani = FuncAnimation(fig=fig, func=update, frames=frames)
+    folderpath_save.mkdir(exist_ok=True, parents=True)
+    ani.save(
+        folderpath_save / f"px_py_all_species.{VIDEO_FORMAT.lower()}",
+        dpi=VIDEO_DPI,
+        writer="ffmpeg",
+        fps=30,
+    )
+
 if __name__ == "__main__":
     plt.style.use(MPLSTYLE_FILE)
     matplotlib.rcParams['figure.dpi'] = 100
@@ -1257,3 +1378,4 @@ if __name__ == "__main__":
     plt.savefig(folder / "convergence_temperature_wave_props.pdf", bbox_inches='tight', dpi=200)
     distributionsVelocitySpace(info, wave)
     plt.savefig(folder / "distributions_velocity_space.pdf", bbox_inches='tight', dpi=200)
+    publication.pxPyOverviewVideo(info, [100, 140, 180], folder)

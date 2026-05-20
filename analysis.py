@@ -183,6 +183,9 @@ def normalizeDistributionXPx2D(
     v = px_grid / (info.si_mass)
     dx = np.abs(x_grid[...,1] - x_grid[...,0])
     dv_x = np.abs(v[...,1] - v[...,0])
+    dv_x = dv_x.reshape(
+        *[sz if sz in dv_x.shape else 1 for sz in dist_x_px.shape]
+    ) 
     length_y = np.abs(y_grid[...,0] - y_grid[...,-1])
     f_v = dist_x_px / (dv_x * dx * length_y)
     return v, f_v
@@ -217,6 +220,8 @@ def normalizeDistributionPxPy(
     v_y = py_grid / info.si_mass
     dv_x = v_x[...,1] - v_x[...,0]
     dv_y = v_y[...,1] - v_y[...,0]
+    dv_x = dv_x.reshape(*[sz if sz in dv_x.shape else 1 for sz in dist_px_py.shape]) 
+    dv_y = dv_y.reshape(*[sz if sz in dv_y.shape else 1 for sz in dist_px_py.shape]) 
     length_x = np.abs(x_grid[...,-1] - x_grid[...,0])
     length_y = np.abs(y_grid[...,-1] - y_grid[...,0])
     f_v = dist_px_py / (dv_x * dv_y * length_x * length_y) # s^2/m^4

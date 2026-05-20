@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.animation import FuncAnimation
 import numpy as np
-from scipy import constants, signal, optimize, stats
+from scipy import constants, signal, optimize, stats, interpolate
 from IPython.display import HTML
 
 import analysis
@@ -37,9 +37,8 @@ def _saveFigure(fig_name: str, sub_folder: Variation|str|None=None):
     generalSaveFigure(fig_name, folder)
 
 def _saveVideo(ani: FuncAnimation, vid_name: str, sub_folder: Variation|str|None=None):
-    if sub_folder is None:
-        folder = "simulation-2D"
-    else:
+    folder = "simulation-2D"
+    if sub_folder is not None:
         if isinstance(sub_folder, Variation):
             sub_folder = sub_folder.value
         folder = f"simulation-2D/{sub_folder}"
@@ -807,13 +806,14 @@ def videoPxPyDistribution(
     dv_y = abs(v_y[1] - v_y[0])
     v_x = np.concat([[v_x[0]-dv_x], v_x]) + dv_x / 2
     v_y = np.concat([[v_y[0]-dv_y], v_y]) + dv_y / 2
-    non_zero_v_x = v_x[np.nonzero(np.sum(f_v, axis=(0,2)) > 0)]
-    non_zero_v_y = v_y[np.nonzero(np.sum(f_v, axis=(0,1)) > 0)]
+
+    non_zero_v_x = v_x[:,np.nonzero(np.sum(f_v, axis=(0,2)) > 0)]
+    non_zero_v_y = v_y[:,np.nonzero(np.sum(f_v, axis=(0,1)) > 0)]
     f_v[f_v<=0] = np.min(f_v[f_v>0])
 
     plt.style.use(MPLSTYLE_FILE)
     fig, ax = plt.subplots()
-    quad = ax.pcolormesh(v_x, v_y, f_v[0].T, norm="log")
+    quad = ax.pcolormesh(v_x[0], v_y[0], f_v[0].T, norm="log")
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="5%", pad=0.05)
     fig.colorbar(quad, label=f"$\\langle f_{species.symbol()}\\rangle_\\mathbf{{r}}$ (s$\\,/\\,$m$^3$)", cax=cax)
